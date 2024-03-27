@@ -116,13 +116,26 @@ local function showform(player)
 				return "refresh"
 			elseif fields.confirm and table.indexof(confirmed, pname) == -1 then
 				table.insert(confirmed, pname)
+
+				hud:change(pname, "showform_explanation", {
+					text = "Use /teamform to join a team. You've confirmed being in team " .. ctf_teams.get(pname)
+				})
 			end
 			-- select_team1 = "Select Team"
 			-- team1 = "CHG:1"
 		end,
 	})
 
-	-- TODO: Need to show a HUD explaining /teamform
+	if not hud:exists(player, "showform_explanation") then
+		hud:add(player, "showform_explanation", {
+			hud_elem_type = "text",
+			position = {x = 0.5, y = 0.5},
+			offset = {x = 0, y = -32},
+			alignment = {x = "center", y = "up"},
+			text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+			color = 0xFFFFFF,
+		})
+	end
 end
 
 minetest.register_chatcommand("teamform", {
@@ -131,6 +144,16 @@ minetest.register_chatcommand("teamform", {
 		local player = minetest.get_player_by_name(name)
 
 		if player and not match_started then
+			local idx = table.indexof(confirmed, name)
+
+			if idx ~= -1 then
+				table.remove(confirmed, idx)
+			end
+
+			hud:change(name, "showform_explanation", {
+				text = "Use /teamform to join a team. You haven't confirmed what team you're in."
+			})
+
 			showform(player)
 		end
 	end
@@ -159,6 +182,8 @@ minetest.register_globalstep(function(dtime)
 
 		if #confirmed >= TEAM_SIZE * 2 then
 			match_started = true
+
+			hud:clear_all()
 
 			for _, tdef in pairs(ctf_teams.online_players) do
 				for name in pairs(tdef.players) do
