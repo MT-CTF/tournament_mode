@@ -9,7 +9,7 @@ local classes = ctf_core.include_files(
 	"spectators.lua"
 )
 
-local TEAM_SIZE = 0.5
+local TEAM_SIZE = 3 --players
 
 local old_bounty_reward_func = ctf_modebase.bounties.bounty_reward_func
 local old_get_next_bounty = ctf_modebase.bounties.get_next_bounty
@@ -167,8 +167,25 @@ minetest.register_on_leaveplayer(function(player)
 	end
 end)
 
--- TODO: Need to prevent access to the server to all but those with a 'manager' priv granted to admins by default
--- Use on_prejoinplayer
+minetest.register_privilege("tournament_manager", {
+	description = "Tournament Manager",
+	give_to_admin = true,
+})
+
+minetest.register_privilege("tournament_spectator", {
+	description = "Tournament Spectator",
+})
+
+minetest.register_on_prejoinplayer(function(name)
+	if #minetest.get_connected_players() >= TEAM_SIZE*2 then
+		if minetest.check_player_privs(name, {tournament_manager   = true}) or
+		   minetest.check_player_privs(name, {tournament_spectator = true}) then
+			return
+		end
+
+		return "Player limit reached. Only spectators/tournament managers can join"
+	end
+end)
 
 local timer = 0
 minetest.register_globalstep(function(dtime)
