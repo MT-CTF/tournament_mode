@@ -4,12 +4,12 @@ local recent_rankings = ctf_modebase.recent_rankings(rankings)
 local features = ctf_modebase.features(rankings, recent_rankings)
 
 local classes = ctf_core.include_files(
-	"paxel.lua",
 	"classes.lua",
+	"paxel.lua",
 	"spectators.lua"
 )
 
-local TEAM_SIZE = 3 --players
+local TEAM_SIZE = 3 --players each
 
 local old_bounty_reward_func = ctf_modebase.bounties.bounty_reward_func
 local old_get_next_bounty = ctf_modebase.bounties.get_next_bounty
@@ -36,26 +36,28 @@ custom_item_levels.pick   = prioritize_medic_paxel("pick"  )
 custom_item_levels.axe    = prioritize_medic_paxel("axe"   )
 custom_item_levels.shovel = prioritize_medic_paxel("shovel")
 
-minetest.register_entity("tournament_mode:freezeplayer", {
-	is_visible = true,
-	visual = "wielditem",
-	wield_item = "default:glass",
-	visual_size = vector.new(1, 2, 1),
-	physical = false,
-	makes_footstep_sound = false,
-	backface_culling = false,
-	static_save = false,
-	pointable = false,
-	glow = 5,
-	on_punch = function() return true end,
-})
-
 local match_started = false
 local confirmed = {}
 
+local function color_confirmed(players)
+	local out = ""
+
+	for _, p in pairs(players) do
+		if table.indexof(confirmed, p) ~= -1 then
+			out = out .. ctf_teams.team[ctf_teams.get(p)].color .. p .. ","
+		else
+			out = out .. p .. ","
+		end
+	end
+
+	return out
+end
+
+local form_shown = {}
 local function showform(player)
 	local playername = player:get_player_name()
 
+	form_shown[playername] = true
 	ctf_gui.show_formspec(player, "tournament_mode:choose_team",
 		function(context)
 			local show_confirm = table.indexof(confirmed, playername) == -1 and ctf_teams.get(playername) ~= "spectator"
@@ -79,14 +81,12 @@ local function showform(player)
 				"formspec_version[4]",
 				{"label[0 ,0;Team 1 (%s)]",      minetest.colorize(ctf_teams.team[team1].color, HumanReadable(team1))},
 				{"label[%f,0;Team 2 (%s)]", w/2, minetest.colorize(ctf_teams.team[team2].color, HumanReadable(team2))},
-				{"textlist[0 ,0.5;%f,7;team1;%s]",
-					w/2 - px,
-					table.concat(team1_players, ",")
+				{"textlist[0 ,0.5;%f,7;team1;" .. color_confirmed(team1_players) .. "]",
+					w/2 - px
 				},
-				{"textlist[%f,0.5;%f,7;team2;%s]",
+				{"textlist[%f,0.5;%f,7;team2;" .. color_confirmed(team2_players) .. "]",
 					w/2,
-					w/2 - px,
-					table.concat(team2_players, ",")
+					w/2 - px
 				},
 				{"style[select_team1;bgcolor=%s]", ctf_teams.team[team1].color},
 				{"style[select_team2;bgcolor=%s]", ctf_teams.team[team2].color},
@@ -108,19 +108,63 @@ local function showform(player)
 				ctf_teams.remove_online_player(pname)
 				ctf_teams.set(pname, ctf_teams.current_team_list[1], true)
 
+				for p in pairs(form_shown) do
+					if p ~= pname then
+						showform(minetest.get_player_by_name(p))
+					end
+				end
+
+				local idx = table.indexof(confirmed, playername)
+				if idx ~= -1 then
+					table.remove(confirmed, idx)
+					hud:change(playername, "showform_explanation", {
+						text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+						color = 0xFF0000,
+					})
+				end
+
 				return "refresh"
 			elseif fields.select_team2 then
 				ctf_teams.remove_online_player(pname)
 				ctf_teams.set(pname, ctf_teams.current_team_list[2], true)
 
+				for p in pairs(form_shown) do
+					if p ~= pname then
+						showform(minetest.get_player_by_name(p))
+					end
+				end
+
+				local idx = table.indexof(confirmed, playername)
+				if idx ~= -1 then
+					table.remove(confirmed, idx)
+					hud:change(playername, "showform_explanation", {
+						text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+						color = 0xFF0000,
+					})
+				end
+
 				return "refresh"
 			elseif fields.confirm and table.indexof(confirmed, pname) == -1 then
 				table.insert(confirmed, pname)
 
+				form_shown[pname] = nil
+
+				for p in pairs(form_shown) do
+					if p ~= pname then
+						showform(minetest.get_player_by_name(p))
+					end
+				end
+
 				hud:change(pname, "showform_explanation", {
-					text = "Use /teamform to join a team. You've confirmed being in team " .. ctf_teams.get(pname)
+					text = "Use /teamform to see the teams. You've confirmed being in team " .. ctf_teams.get(pname),
+					color = 0xFFFFFF,
 				})
+			else
+				if fields.quit then
+					form_shown[pname] = nil
+				end
 			end
+
 			-- select_team1 = "Select Team"
 			-- team1 = "CHG:1"
 		end,
@@ -133,7 +177,7 @@ local function showform(player)
 			offset = {x = 0, y = -32},
 			alignment = {x = "center", y = "up"},
 			text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
-			color = 0xFFFFFF,
+			color = 0xFF0000,
 		})
 	end
 end
@@ -144,16 +188,6 @@ minetest.register_chatcommand("teamform", {
 		local player = minetest.get_player_by_name(name)
 
 		if player and not match_started then
-			local idx = table.indexof(confirmed, name)
-
-			if idx ~= -1 then
-				table.remove(confirmed, idx)
-			end
-
-			hud:change(name, "showform_explanation", {
-				text = "Use /teamform to join a team. You haven't confirmed what team you're in."
-			})
-
 			showform(player)
 		end
 	end
@@ -165,6 +199,8 @@ minetest.register_on_leaveplayer(function(player)
 	if idx ~= -1 then
 		table.remove(confirmed, idx)
 	end
+
+	form_shown[player:get_player_name()] = nil
 end)
 
 minetest.register_privilege("tournament_manager", {
@@ -176,8 +212,16 @@ minetest.register_privilege("tournament_spectator", {
 	description = "Tournament Spectator",
 })
 
+minetest.register_chatcommand("lock_players", {
+	description = "Once all the currently online players confirm their team the match will start",
+	-- privs = {tournament_manager = true},
+	func = function(name, params)
+		TEAM_SIZE = #minetest.get_connected_players() / 2
+	end
+})
+
 minetest.register_on_prejoinplayer(function(name)
-	if #minetest.get_connected_players() >= TEAM_SIZE*2 then
+	if match_started then
 		if minetest.check_player_privs(name, {tournament_manager   = true}) or
 		   minetest.check_player_privs(name, {tournament_spectator = true}) then
 			return
@@ -211,6 +255,8 @@ minetest.register_globalstep(function(dtime)
 							interact = true,
 							fly = false, noclip = false,
 						})
+
+						player:set_armor_groups({ immortal = 0 })
 
 						if player.observers then -- Need to account for the pre-5.9 alternative if set up
 							player:set_observers(nil)
@@ -350,9 +396,9 @@ ctf_modebase.register_mode("tournament", {
 					showform(player)
 				end
 			end)
-
-			return "spectator"
 		end
+
+		return "spectator"
 	end,
 	on_allocplayer = function(player, new_team)
 		if new_team then
@@ -364,6 +410,8 @@ ctf_modebase.register_mode("tournament", {
 					interact = false,
 					fly = true, noclip = true,
 				})
+
+				player:set_armor_groups({ immortal = 1 })
 
 				if player.observers then -- Need to set up a pre-5.9 alternative
 					player:set_observers({[player:get_player_name()] = false})
@@ -385,12 +433,12 @@ ctf_modebase.register_mode("tournament", {
 	on_flag_rightclick = function(clicker)
 		classes.show_class_formspec(clicker)
 	end,
-	get_chest_access = features.get_chest_access,
+	get_chest_access = function() return true, true end,
 	on_punchplayer = features.on_punchplayer,
 	can_punchplayer = features.can_punchplayer,
 	on_healplayer = features.on_healplayer,
 	calculate_knockback = function(player, hitter, time_from_last_punch, tool_capabilities, dir, distance, damage)
-		if features.can_punchplayer(player, hitter) then
+		if features.can_punchplayer(player, hitter) and not tool_capabilities.damage_groups.ranged then
 			return 2 * (tool_capabilities.damage_groups.knockback or 1) * math.min(1, time_from_last_punch or 0)
 		else
 			return 0

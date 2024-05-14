@@ -115,20 +115,6 @@ end
 local KNIGHT_COOLDOWN_TIME = 26
 local KNIGHT_USAGE_TIME = 8
 
-ctf_settings.register("tournament_mode:simple_knight_activate", {
-	type = "bool",
-	label = "[Classes] Simple Knight sword activation",
-	description = "If enabled you don't need to hold Sneak/Run to activate the rage ability",
-	default = "false",
-})
-
-ctf_settings.register("tournament_mode:simple_support_activate", {
-	type = "bool",
-	label = "[Classes] Simple Support bandage immunity activation",
-	description = "If enabled you don't need to hold Sneak/Run to activate the immunity ability",
-	default = "false",
-})
-
 ctf_melee.simple_register_sword("tournament_mode:knight_sword", {
 	description = "Knight Sword\n" .. minetest.colorize("gold",
 			"(Sneak/Run) + Rightclick to use Rage ability (Lasts "..
@@ -139,7 +125,7 @@ ctf_melee.simple_register_sword("tournament_mode:knight_sword", {
 	damage_groups = {fleshy = 7},
 	full_punch_interval = 0.7,
 	rightclick_func = function(itemstack, user, pointed)
-		if ctf_settings.get(user, "tournament_mode:simple_knight_activate") ~= "true" then
+		if ctf_settings.get(user, "ctf_classes:simple_knight_activate") ~= "true" then
 			local ctl = user:get_player_control()
 			if not ctl.sneak and not ctl.aux1 then return end
 		end
@@ -293,7 +279,7 @@ ctf_healing.register_bandage("tournament_mode:support_bandage", {
 	heal_min = 4,
 	heal_max = 5,
 	rightclick_func = function(itemstack, user, pointed)
-		if ctf_settings.get(user, "tournament_mode:simple_support_activate") ~= "true" then
+		if ctf_settings.get(user, "ctf_classes:simple_support_activate") ~= "true" then
 		    local ctl = user:get_player_control()
 		    if not ctl.sneak and not ctl.aux1 then return end
         end
@@ -391,7 +377,7 @@ local function select_class(player, classname)
 	player = PlayerObj(player)
 	if not player then return end
 
-	if ctf_modebase.current_mode == "classes" and dist_from_flag(player) <= 5 then
+	if ctf_modebase.current_mode == "tournament" and dist_from_flag(player) <= 5 then
 		cooldowns:set(player, CLASS_SWITCH_COOLDOWN)
 		classes.set(player, classname)
 	end
@@ -412,7 +398,7 @@ function classes.show_class_formspec(player)
 	if not player then return end
 
 	if not cooldowns:get(player) then
-		if ctf_modebase.current_mode ~= "classes" then return end
+		if ctf_modebase.current_mode ~= "tournament" then return end
 
 		if dist_from_flag(player) > 5 then
 			hud_events.new(player, {
@@ -511,7 +497,7 @@ function classes.show_class_formspec(player)
 			class_props = class_props,
 			class = classes.get_name(player) or "knight",
 			_on_formspec_input = function(pname, context, fields)
-				if ctf_modebase.current_mode ~= "classes" then return end
+				if ctf_modebase.current_mode ~= "tournament" then return end
 
 				for _, class in pairs(context.class_list) do
 					if fields["show_"..class] then

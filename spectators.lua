@@ -5,6 +5,4 @@ ctf_teams.team.spectator = {
 	not_playing = true
 }
 
--- TODO: Fix this team being shown in the mode summary
-
 table.insert(ctf_teams.teamlist, "spectator")
