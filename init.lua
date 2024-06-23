@@ -2,6 +2,7 @@ local rankings = ctf_rankings.init()
 local hud = mhud.init()
 local recent_rankings = ctf_modebase.recent_rankings(rankings)
 local features = ctf_modebase.features(rankings, recent_rankings)
+local mods = minetest.get_mod_storage()
 
 local classes = ctf_core.include_files(
 	"classes.lua",
@@ -10,6 +11,7 @@ local classes = ctf_core.include_files(
 )
 
 local TEAM_SIZE = 3 --players each
+local CONFIRMED_PLAYER_TARGET = TEAM_SIZE * 2
 
 local old_bounty_reward_func = ctf_modebase.bounties.bounty_reward_func
 local old_get_next_bounty = ctf_modebase.bounties.get_next_bounty
@@ -38,6 +40,34 @@ custom_item_levels.shovel = prioritize_medic_paxel("shovel")
 
 local match_started = false
 local confirmed = {}
+local locked = {}
+
+--[[
+
+   _______                     ______
+  |__   __|                   |  ____|
+     | | ___  __ _ _ __ ___   | |__ ___  _ __ _ __ ___
+     | |/ _ \/ _` | '_ ` _ \  |  __/ _ \| '__| '_ ` _ \
+     | |  __/ (_| | | | | | | | | | (_) | |  | | | | | |
+     |_|\___|\__,_|_| |_| |_| |_|  \___/|_|  |_| |_| |_|
+
+]]
+
+-- All values need to be false at first
+local TEAM = {"test team", false}
+local TEAM_ID = {false, false}
+
+local function teamcolor_to_teamnum(x)
+	return table.indexof(ctf_teams.current_team_list, x)
+end
+
+local function teamnum_to_teamcolor(x)
+	return ctf_teams.current_team_list[x]
+end
+
+local function has_team_leader(teamnum)
+	return true
+end
 
 local function color_confirmed(players)
 	local out = ""
@@ -53,15 +83,31 @@ local function color_confirmed(players)
 	return out
 end
 
+local showform
 local form_shown = {}
-local function showform(player)
+
+local function reshow_form(except)
+	for p in pairs(form_shown) do
+		if not except or p ~= except then
+			showform(minetest.get_player_by_name(p))
+		end
+	end
+end
+
+showform = function(player)
 	local playername = player:get_player_name()
+
+	if locked[playername] then
+		if ctf_teams.get(playername) ~= locked[playername] then
+			ctf_teams.set(playername, locked[playername], true)
+		end
+	end
 
 	form_shown[playername] = true
 	ctf_gui.show_formspec(player, "tournament_mode:choose_team",
 		function(context)
 			local show_confirm = table.indexof(confirmed, playername) == -1 and ctf_teams.get(playername) ~= "spectator"
-			local w, h = 10, (show_confirm and 10 or 9)
+			local w, h = 10, (locked[playername] and 0 or 1) + (show_confirm and 10 or 9)
 			local px, py = 0.2, 0.2
 
 			local team1 = ctf_teams.current_team_list[1]
@@ -79,8 +125,8 @@ local function showform(player)
 			local out = {
 				{"size[%d,%d]", w, h},
 				"formspec_version[4]",
-				{"label[0 ,0;Team 1 (%s)]",      minetest.colorize(ctf_teams.team[team1].color, HumanReadable(team1))},
-				{"label[%f,0;Team 2 (%s)]", w/2, minetest.colorize(ctf_teams.team[team2].color, HumanReadable(team2))},
+				{"label[0 ,0;Team 1 (%s)]",      minetest.colorize(ctf_teams.team[team1].color, TEAM[1] or team1)},
+				{"label[%f,0;Team 2 (%s)]", w/2, minetest.colorize(ctf_teams.team[team2].color, TEAM[2] or team2)},
 				{"textlist[0 ,0.5;%f,7;team1;" .. color_confirmed(team1_players) .. "]",
 					w/2 - px
 				},
@@ -90,13 +136,29 @@ local function showform(player)
 				},
 				{"style[select_team1;bgcolor=%s]", ctf_teams.team[team1].color},
 				{"style[select_team2;bgcolor=%s]", ctf_teams.team[team2].color},
-				{"button[0, %f;2.4,1;select_team1;Select Team]", 7.5 + py},
-				{"button[%f,%f;2.4,1;select_team2;Select Team]", w/2, 7.5 + py},
 			}
 
+			if not locked[playername] then
+				table.insert(out, {"button[0, %f;2.4,1;select_team1;Select Team]", 7.5 + py})
+				table.insert(out, {"button[%f,%f;2.4,1;select_team2;Select Team]", w/2, 7.5 + py})
+			end
+
 			if show_confirm then
-				table.insert(out, "style[confirm;font=bold]")
-				table.insert(out, {"button_exit[%f,%f;3,1;confirm;Confirm Team]", (w/2) - (3/2), 9 + py})
+				if has_team_leader(teamcolor_to_teamnum(ctf_teams.get(playername))) then
+					table.insert(out, "style[confirm;font=bold]")
+					table.insert(out, {
+						"button_exit[%f,%f;3,1;confirm;%s]",
+						(w/2) - (3/2),
+						9 + py,
+						locked[playername] and "Team Is Ready" or "Confirm Team"
+					})
+				else
+					table.insert(out, "style[confirm_disabled;font=bold;textcolor=grey]")
+					table.insert(out, {
+						"button[%f,%f;6,1;confirm_disabled;Confirm Team (Waiting for team leader...)]",
+						(w/2) - (6/2), 9 + py
+					})
+				end
 			end
 
 			return ctf_gui.list_to_formspec_str(out)
@@ -104,15 +166,11 @@ local function showform(player)
 	, {
 		player = player,
 		_on_formspec_input = function(pname, context, fields)
-			if fields.select_team1 then
+			if fields.select_team1 and not locked[pname] then
 				ctf_teams.remove_online_player(pname)
 				ctf_teams.set(pname, ctf_teams.current_team_list[1], true)
 
-				for p in pairs(form_shown) do
-					if p ~= pname then
-						showform(minetest.get_player_by_name(p))
-					end
-				end
+				reshow_form(pname)
 
 				local idx = table.indexof(confirmed, playername)
 				if idx ~= -1 then
@@ -124,15 +182,11 @@ local function showform(player)
 				end
 
 				return "refresh"
-			elseif fields.select_team2 then
+			elseif fields.select_team2 and not locked[pname] then
 				ctf_teams.remove_online_player(pname)
 				ctf_teams.set(pname, ctf_teams.current_team_list[2], true)
 
-				for p in pairs(form_shown) do
-					if p ~= pname then
-						showform(minetest.get_player_by_name(p))
-					end
-				end
+				reshow_form(pname)
 
 				local idx = table.indexof(confirmed, playername)
 				if idx ~= -1 then
@@ -144,19 +198,18 @@ local function showform(player)
 				end
 
 				return "refresh"
-			elseif fields.confirm and table.indexof(confirmed, pname) == -1 then
+			elseif fields.confirm and table.indexof(confirmed, pname) == -1 and
+					has_team_leader(teamcolor_to_teamnum(ctf_teams.get(pname))) then
 				table.insert(confirmed, pname)
 
 				form_shown[pname] = nil
 
-				for p in pairs(form_shown) do
-					if p ~= pname then
-						showform(minetest.get_player_by_name(p))
-					end
-				end
+				reshow_form(pname)
 
+				local num = teamcolor_to_teamnum(ctf_teams.get(pname))
 				hud:change(pname, "showform_explanation", {
-					text = "Use /teamform to see the teams. You've confirmed being in team " .. ctf_teams.get(pname),
+					text = "Use /teamform to see the teams. You've confirmed being in team \"" ..
+							(TEAM[num] or ctf_teams.current_team_list[num]) .. "\"",
 					color = 0xFFFFFF,
 				})
 			else
@@ -193,6 +246,60 @@ minetest.register_chatcommand("teamform", {
 	end
 })
 
+minetest.register_chatcommand("teamname", {
+	description = "Set the name of your team",
+	func = function(name, teamname)
+		local player = minetest.get_player_by_name(name)
+
+		if not player then
+			return false, "You need to be online to run this command"
+		end
+
+		local names = mods:get_string("team_names")
+
+		if names == "" then
+			names = {}
+		else
+			names = minetest.deserialize(names, true)
+		end
+
+		if teamname == "" then
+			if names["p:"..name] then
+				return true, "The name of your team is \"" .. names["p:"..name] .. "\""
+			else
+				return true, "You haven't set a team name"
+			end
+		end
+
+		if not names[teamname] then
+			if names["p:"..name] then
+				names[names["p:"..name]] = nil
+				names["p:"..name] = nil
+			end
+
+			names[teamname] = name
+			names["p:"..name] = teamname
+		else
+			return false, "The team name \"" .. teamname .. "\" is claimed by " .. names[teamname]
+		end
+
+		mods:set_string("team_names", minetest.serialize(names))
+
+		if locked[name] then
+			TEAM[teamcolor_to_teamnum(locked[name])] = teamname
+
+			reshow_form()
+
+			return true, "Team name set to \"" .. teamname .. "\""
+		else
+			minetest.kick_player(
+				name,
+				"Team name set to \"" .. teamname .. "\". You may rejoin if you are meant to play a match on this server"
+			)
+		end
+	end
+})
+
 minetest.register_on_leaveplayer(function(player)
 	local idx = table.indexof(confirmed, player:get_player_name())
 
@@ -203,74 +310,274 @@ minetest.register_on_leaveplayer(function(player)
 	form_shown[player:get_player_name()] = nil
 end)
 
+--[[
+
+   _____  _                         _______             _    _
+  |  __ \| |                       |__   __|           | |  (_)
+  | |__) | | __ _ _   _  ___ _ __     | |_ __ __ _  ___| | ___ _ __   __ _
+  |  ___/| |/ _` | | | |/ _ \ '__|    | | '__/ _` |/ __| |/ / | '_ \ / _` |
+  | |    | | (_| | |_| |  __/ |       | | | | (_| | (__|   <| | | | | (_| |
+  |_|    |_|\__,_|\__, |\___|_|       |_|_|  \__,_|\___|_|\_\_|_| |_|\__, |
+                   __/ |                                              __/ |
+                  |___/                                              |___/
+
+]]
+
+local tracked_players = {}
+local allow_rejoin = {}
+
 minetest.register_privilege("tournament_manager", {
 	description = "Tournament Manager",
-	give_to_admin = true,
+	give_to_admin = false,
 })
 
 minetest.register_privilege("tournament_spectator", {
 	description = "Tournament Spectator",
+	give_to_admin = false,
 })
 
-minetest.register_chatcommand("lock_players", {
-	description = "Once all the currently online players confirm their team the match will start",
-	-- privs = {tournament_manager = true},
+minetest.register_chatcommand("report_dq", {
+	description = "Tell the game a player can't make it",
+	privs = {tournament_manager = true},
 	func = function(name, params)
-		TEAM_SIZE = #minetest.get_connected_players() / 2
+		-- TODO: Limit to team leaders
+		CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
 	end
 })
+
+local function on_new_tracked(pname)
+end
+
+local function on_match_start()
+	return true
+end
 
 minetest.register_on_prejoinplayer(function(name)
 	if match_started then
 		if minetest.check_player_privs(name, {tournament_manager   = true}) or
-		   minetest.check_player_privs(name, {tournament_spectator = true}) then
+		   minetest.check_player_privs(name, {tournament_spectator = true}) or
+		   allow_rejoin[name]
+		then
 			return
 		end
 
-		return "Player limit reached. Only spectators/tournament managers can join"
+		return "Game has started. Only spectators/tournament managers can join"
+	end
+end)
+
+minetest.register_on_joinplayer(function(player)
+	local pname = player:get_player_name()
+
+	if allow_rejoin[pname] then
+		allow_rejoin[pname] = nil
+	end
+
+	if minetest.check_player_privs(player, {tournament_manager   = true}) or
+	   minetest.check_player_privs(player, {tournament_spectator = true})
+	then
+		return
+	end
+
+	table.insert(tracked_players, player:get_player_name())
+	on_new_tracked(player:get_player_name())
+end)
+
+minetest.register_on_leaveplayer(function(player)
+	local name = player:get_player_name()
+
+	if match_started then
+		allow_rejoin[name] = true
+	end
+
+	local idx = table.indexof(tracked_players, name)
+
+	if idx >= 1 then
+		table.remove(tracked_players, idx)
 	end
 end)
 
 local timer = 0
 minetest.register_globalstep(function(dtime)
 	if match_started then return end
-	if #minetest.get_connected_players() < TEAM_SIZE * 2 then return end
+	if #tracked_players < CONFIRMED_PLAYER_TARGET then return end
 
 	timer = timer + dtime
 
-	if timer >= 2 then
+	if timer >= 5 then
 		timer = 0
 
-		if #confirmed >= TEAM_SIZE * 2 then
-			match_started = true
+		if TEAM[1] and TEAM[2] and #confirmed >= CONFIRMED_PLAYER_TARGET then
+			if on_match_start() then
+				match_started = true
 
-			hud:clear_all()
+				hud:clear_all()
 
-			for _, tdef in pairs(ctf_teams.online_players) do
-				for name in pairs(tdef.players) do
-					local player = minetest.get_player_by_name(name)
+				for _, tdef in pairs(ctf_teams.online_players) do
+					for name in pairs(tdef.players) do
+						local player = minetest.get_player_by_name(name)
 
-					if player then
-						minetest.change_player_privs(name, {
-							interact = true,
-							fly = false, noclip = false,
-						})
+						if player then
+							minetest.change_player_privs(name, {
+								interact = true,
+								fly = false, noclip = false,
+							})
 
-						player:set_armor_groups({ immortal = 0 })
+							player:set_armor_groups({ immortal = 0 })
 
-						if player.observers then -- Need to account for the pre-5.9 alternative if set up
-							player:set_observers(nil)
+							if player.observers then -- Need to account for the pre-5.9 alternative if set up
+								player:set_observers(nil)
+							end
+
+							features.tp_player_near_flag(player)
 						end
-
-						features.tp_player_near_flag(player)
 					end
 				end
-			end
 
-			ctf_modebase.build_timer.start(100)
+				ctf_modebase.build_timer.start(100)
+			end
 		end
 	end
 end)
+
+--[[
+
+    _____ _           _ _                          _____       _                       _   _
+   / ____| |         | | |                        |_   _|     | |                     | | (_)
+  | |    | |__   __ _| | | ___  _ __   __ _  ___    | |  _ __ | |_ ___  __ _ _ __ __ _| |_ _  ___  _ __
+  | |    | '_ \ / _` | | |/ _ \| '_ \ / _` |/ _ \   | | | '_ \| __/ _ \/ _` | '__/ _` | __| |/ _ \| '_ \
+  | |____| | | | (_| | | | (_) | | | | (_| |  __/  _| |_| | | | ||  __/ (_| | | | (_| | |_| | (_) | | | |
+   \_____|_| |_|\__,_|_|_|\___/|_| |_|\__, |\___| |_____|_| |_|\__\___|\__, |_|  \__,_|\__|_|\___/|_| |_|
+                                       __/ |                            __/ |
+                                      |___/                            |___/
+
+]]
+
+local http, TOURNAMENT_URL
+
+local FOR_MATCH
+local TEAM_LEADER = {}
+
+local API_KEY = minetest.settings:get("tournament_mode_api_key")
+local TOURNAMENT_ID = minetest.settings:get("tournament_mode_tournament_id")
+local STATION_ID = minetest.settings:get("tournament_mode_station_id") or 1
+
+if API_KEY then
+	assert(TOURNAMENT_ID, "Please set tournament_mode_tournament_id")
+	assert(STATION_ID, "Please set tournament_mode_station_id")
+
+	TOURNAMENT_URL = "https://api.challonge.com/v1/tournaments/" .. TOURNAMENT_ID
+
+	http = minetest.request_http_api()
+	assert(http, "Please add tournament_mode to secure.http_mods")
+
+	on_match_start = function()
+		if not FOR_MATCH then return false end
+
+		http.fetch({
+			url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH.."/mark_as_underway.json",
+			timeout = 10,
+			method = "POST",
+			data = {api_key = API_KEY},
+		}, function(res)
+			assert(res.succeeded, "Match ID was incorrect")
+		end)
+
+		return true
+	end
+
+	on_new_tracked = function(pname)
+		if not minetest.get_player_by_name(pname) then
+			return
+		elseif #ctf_teams.current_team_list <= 0 then
+			minetest.after(1, on_new_tracked, pname)
+			return
+		end
+
+		http.fetch({
+			url = TOURNAMENT_URL .. "/matches.json?state=open&api_key="..API_KEY,
+			timeout = 10,
+			method = "GET",
+		}, function(matches_res)
+			assert(matches_res.succeeded)
+
+			-- minetest.log(dump(matches_res))
+
+			matches_res = minetest.parse_json(matches_res.data, {})
+
+			minetest.log(dump(#matches_res))
+
+			if #matches_res > 0 then
+				has_team_leader = function(teamnum)
+					if TEAM_LEADER[teamnum] then
+						return TEAM_LEADER[teamnum]
+					else
+						return false
+					end
+				end
+
+				local names = mods:get_string("team_names")
+				if names == "" then
+					names = {}
+				else
+					names = minetest.deserialize(names, true)
+				end
+
+				for matchidx, entry in pairs(matches_res) do
+					for team, id in pairs({entry.match.player1_id, entry.match.player2_id}) do
+						team = tonumber(team)
+
+						http.fetch({
+							url = TOURNAMENT_URL .. "/participants/" .. id .. ".json?api_key="..API_KEY,
+							timeout = 10,
+							method = "GET",
+						}, function(player_res)
+							if FOR_MATCH and #TEAM_LEADER >= 2 then return end
+
+							assert(player_res.succeeded)
+
+							-- minetest.log(dump(player_res))
+
+							player_res = minetest.parse_json(player_res.data, {}).participant
+
+							minetest.log(dump(player_res.display_name))
+							minetest.log(dump(pname))
+							minetest.log(dump(names))
+
+							if (player_res.display_name == pname or names[player_res.display_name] == pname) and
+							(not FOR_MATCH or FOR_MATCH == entry.match.id) then
+								FOR_MATCH = entry.match.id
+								TEAM_LEADER[team] = pname
+
+								locked[pname] = teamnum_to_teamcolor(tonumber(team))
+								TEAM[team] = names["p:"..pname] or pname
+								TEAM_ID[team] = player_res.id
+
+								if TEAM[team] == "" then
+									TEAM[team] = false
+								else
+									reshow_form()
+								end
+
+								minetest.chat_send_all("Found team leader "..team.." ("..TEAM[team].."): "..pname)
+							end
+						end)
+					end
+				end
+			end
+		end)
+	end
+end
+
+--[[
+
+   _______                                                _     __  __           _
+  |__   __|                                              | |   |  \/  |         | |
+     | | ___  _   _ _ __ _ __   __ _ _ __ ___   ___ _ __ | |_  | \  / | ___   __| | ___
+     | |/ _ \| | | | '__| '_ \ / _` | '_ ` _ \ / _ \ '_ \| __| | |\/| |/ _ \ / _` |/ _ \
+     | | (_) | |_| | |  | | | | (_| | | | | | |  __/ | | | |_  | |  | | (_) | (_| |  __/
+     |_|\___/ \__,_|_|  |_| |_|\__,_|_| |_| |_|\___|_| |_|\__| |_|  |_|\___/ \__,_|\___|
+
+]]
 
 ctf_modebase.register_mode("tournament", {
 	rounds = 1,
@@ -366,8 +673,6 @@ ctf_modebase.register_mode("tournament", {
 	end,
 	on_match_end = function(...)
 		features.on_match_end(...)
-
-		minetest.request_shutdown("Thanks for playing", false)
 	end,
 	allocate_teams = function(map_teams, dont_allocate_players, ...)
 		local teams = table.copy(map_teams)
@@ -429,7 +734,32 @@ ctf_modebase.register_mode("tournament", {
 	can_take_flag = features.can_take_flag,
 	on_flag_take = features.on_flag_take,
 	on_flag_drop = features.on_flag_drop,
-	on_flag_capture = features.on_flag_capture,
+	on_flag_capture = function(capturer, teams, ...)
+		local teamnum = teamcolor_to_teamnum(ctf_teams.get(capturer))
+		local winning_team = TEAM_ID[teamnum]
+
+		minetest.after(5, function()
+			if winning_team then
+				http.fetch({
+					url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH..".json",
+					timeout = 10,
+					method = "PUT",
+					extra_headers = {"Content-Type: application/json"},
+					data = "{\"api_key\": \"" .. API_KEY .. "\", \"match\": {\"winner_id\": " .. winning_team ..
+							", \"scores_csv\": \"" .. ((teamnum == 1) and "1-0" or "0-1") .. "\"}}",
+				}, function(res)
+					assert(res.succeeded, "Match ID was incorrect")
+				end)
+			else
+				minetest.log("error", "The winning team wasn't connected with a Challonge ID. " ..
+						"Send a screenshot of this to an admin. [" .. (TEAM[teamnum] or capturer:get_player_name()) .. "]")
+			end
+
+			minetest.request_shutdown("Thanks for playing", false, 10)
+		end)
+
+		return features.on_flag_capture(capturer, teams, ...)
+	end,
 	on_flag_rightclick = function(clicker)
 		classes.show_class_formspec(clicker)
 	end,

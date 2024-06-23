@@ -1,0 +1,12 @@
+- Only the team leader signs up on Challonge
+- Team leaders should join each of the tournament servers and set their team names with `/teamname` after they register on Challonge. Otherwise they will have to use their ingame name for their Challonge team name
+  - This can be done as you're prepping for a match, but you will have to rejoin after setting your team name, and waiting that long isn't recommended
+  - Your Challonge team name is set through the 'Display Name' field when signing up for the tournament
+- Team leaders are responsible for managing their team members. If they don't show up on time with enough players they will have to `/surrender` or run `/report_dq` for each missing player if they still want to try playing
+- There will be *__0 tolerance__* for accidental or intentional messing around/interference with the tournament.
+  - Don't join tournament servers unless you have a match there. The only specators allowed are officially appointed ones.
+  - Don't run commands unless you're supposed to, e.g `/report_dq`
+  - Don't impersonate players or teams
+  - No cheating
+  - Use common sense, and ask your team leader/a tournament manager where unsure
+- CTF is not balanced for tournaments at all, the first few tournaments may be extremely unfair, and things will probably be run really badly. Bear with it, and try to have fun anyway.

@@ -280,9 +280,9 @@ ctf_healing.register_bandage("tournament_mode:support_bandage", {
 	heal_max = 5,
 	rightclick_func = function(itemstack, user, pointed)
 		if ctf_settings.get(user, "ctf_classes:simple_support_activate") ~= "true" then
-		    local ctl = user:get_player_control()
-		    if not ctl.sneak and not ctl.aux1 then return end
-        end
+			local ctl = user:get_player_control()
+			if not ctl.sneak and not ctl.aux1 then return end
+		end
 
 		local pname = user:get_player_name()
 

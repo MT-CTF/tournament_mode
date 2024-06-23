@@ -1,0 +1,8 @@
+# Sets which Challonge.com 'station' this server is for
+tournament_mode_station_id (Challonge Tournament Station ID) int 1
+
+# Challonge.com API key
+tournament_mode_api_key (Challonge API Key) string
+
+# Challonge.com Tournament ID
+tournament_mode_tournament_id (Challonge Tournament ID) string
