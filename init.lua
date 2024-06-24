@@ -54,8 +54,10 @@ local locked = {}
 ]]
 
 -- All values need to be false at first
-local TEAM = {"test team", false}
+local TEAM = {false, false}
 local TEAM_ID = {false, false}
+
+local TEAM_LEADER = {}
 
 local function teamcolor_to_teamnum(x)
 	return table.indexof(ctf_teams.current_team_list, x)
@@ -338,10 +340,68 @@ minetest.register_privilege("tournament_spectator", {
 
 minetest.register_chatcommand("report_dq", {
 	description = "Tell the game a player can't make it",
-	privs = {tournament_manager = true},
+	privs = {},
 	func = function(name, params)
-		-- TODO: Limit to team leaders
-		CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
+		if has_team_leader(teamcolor_to_teamnum(ctf_teams.get(name))) and locked[name] then
+			CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
+
+			return true, "Player dq reported successfully"
+		else
+			return false, "You need to be a team leader to run this command"
+		end
+	end
+})
+
+local promohud = mhud.init()
+
+minetest.register_on_joinplayer(function(player)
+	if minetest.check_player_privs(player, {tournament_spectator = true}) then
+		local promo = player:get_meta():get_string("spectator_promo")
+
+		if promo == "" then promo = "Set this text with /plug" end
+
+		promohud:add(player, "spectator_promo", {
+			hud_elem_type = "text",
+			position = {x = 1, y = 1},
+			alignment = {x = "left", y = "up"},
+			offset = {x = -24, y = -12},
+			color = 0xFFFFFF,
+			text_scale = 2,
+			text = promo
+		})
+	end
+end)
+
+minetest.register_chatcommand("promo", {
+	description = "Display a line of text in the bottom right of your screen",
+	privs = {tournament_spectator = true},
+	params = "<text|20char limit>",
+	func = function(name, params)
+		local player = minetest.get_player_by_name(name)
+
+		if player then
+			player:get_meta():set_string("spectator_promo", params:sub(1, 20))
+
+			if promohud:exists(player, "spectator_promo") then
+				promohud:change(player, "spectator_promo", {
+					text = params:sub(1, 20)
+				})
+			else
+				promohud:add(player, "spectator_promo", {
+					hud_elem_type = "text",
+					position = {x = 1, y = 1},
+					alignment = {x = "left", y = "up"},
+					offset = {x = -24, y = -12},
+					color = 0xFFFFFF,
+					text_scale = 1,
+					text = params:sub(1, 20)
+				})
+			end
+
+			return true, "Promo set"
+		else
+			return false, "You must be online to run this command!"
+		end
 	end
 })
 
@@ -412,6 +472,47 @@ minetest.register_globalstep(function(dtime)
 
 				hud:clear_all()
 
+				for _, p in pairs(minetest.get_connected_players()) do
+					if ctf_teams.get(p) == "spectator" then
+						if not minetest.check_player_privs(p, {tournament_spectator = true}) then
+							minetest.kick_player(p:get_player_name(), "Only official spectators are allowed when a match is started")
+						else
+							p:hud_set_flags({
+								hotbar = false,
+								healthbar = false,
+								crosshair = false,
+								wielditem = false,
+								breathbar = false,
+								minimap = false,
+								minimap_radar = false,
+								basic_debug = false,
+								chat = false,
+							})
+
+							p:set_properties({
+								makes_footstep_sound = false,
+							})
+
+							for id, def in pairs(p:hud_get_all()) do
+								if def.type == "statbar" then
+									p:hud_change(id, "position", {x = -10, y = -10})
+								end
+							end
+
+							hud:add(p, "match_info", {
+								hud_elem_type = "text",
+								position = {x = 0.5, y = 0},
+								alignment = {x = "center", y = "down"},
+								color = 0xFFFFFF,
+								text_scale = 3,
+								text = minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
+										" vs " ..
+										minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
+							})
+						end
+					end
+				end
+
 				for _, tdef in pairs(ctf_teams.online_players) do
 					for name in pairs(tdef.players) do
 						local player = minetest.get_player_by_name(name)
@@ -455,7 +556,6 @@ end)
 local http, TOURNAMENT_URL
 
 local FOR_MATCH
-local TEAM_LEADER = {}
 
 local API_KEY = minetest.settings:get("tournament_mode_api_key")
 local TOURNAMENT_ID = minetest.settings:get("tournament_mode_tournament_id")
@@ -567,6 +667,44 @@ if API_KEY then
 		end)
 	end
 end
+
+local function report_win(teamnum)
+	local winning_team = TEAM_ID[teamnum]
+
+	if winning_team then
+		http.fetch({
+			url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH..".json",
+			timeout = 10,
+			method = "PUT",
+			extra_headers = {"Content-Type: application/json"},
+			data = "{\"api_key\": \"" .. API_KEY .. "\", \"match\": {\"winner_id\": " .. winning_team ..
+					", \"scores_csv\": \"" .. ((teamnum == 1) and "1-0" or "0-1") .. "\"}}",
+		}, function(res)
+			assert(res.succeeded, "Match ID was incorrect")
+		end)
+	else
+		minetest.log("error", "The winning team wasn't connected with a Challonge ID. " ..
+				"Send a screenshot of this to an admin. [" .. dump(TEAM[teamnum]) .. "]")
+	end
+
+	minetest.request_shutdown("Thanks for playing", false, 10)
+end
+
+minetest.register_chatcommand("surrender", {
+	description = "Give the other team the win",
+	privs = {},
+	func = function(name)
+		local tnum = teamcolor_to_teamnum(ctf_teams.get(name))
+
+		if locked[name] and TEAM_LEADER[tnum] == name then
+			report_win(tnum)
+
+			return true, "You have surrendered to the other team"
+		else
+			return false, "You need to be a team leader to run this command"
+		end
+	end
+})
 
 --[[
 
@@ -736,27 +874,8 @@ ctf_modebase.register_mode("tournament", {
 	on_flag_drop = features.on_flag_drop,
 	on_flag_capture = function(capturer, teams, ...)
 		local teamnum = teamcolor_to_teamnum(ctf_teams.get(capturer))
-		local winning_team = TEAM_ID[teamnum]
 
-		minetest.after(5, function()
-			if winning_team then
-				http.fetch({
-					url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH..".json",
-					timeout = 10,
-					method = "PUT",
-					extra_headers = {"Content-Type: application/json"},
-					data = "{\"api_key\": \"" .. API_KEY .. "\", \"match\": {\"winner_id\": " .. winning_team ..
-							", \"scores_csv\": \"" .. ((teamnum == 1) and "1-0" or "0-1") .. "\"}}",
-				}, function(res)
-					assert(res.succeeded, "Match ID was incorrect")
-				end)
-			else
-				minetest.log("error", "The winning team wasn't connected with a Challonge ID. " ..
-						"Send a screenshot of this to an admin. [" .. (TEAM[teamnum] or capturer:get_player_name()) .. "]")
-			end
-
-			minetest.request_shutdown("Thanks for playing", false, 10)
-		end)
+		minetest.after(5, report_win, teamnum)
 
 		return features.on_flag_capture(capturer, teams, ...)
 	end,
