@@ -704,7 +704,7 @@ local function report_win(teamnum)
 				"Send a screenshot of this to an admin. [" .. dump(TEAM[teamnum]) .. "]")
 	end
 
-	minetest.request_shutdown("Thanks for playing", false, 10)
+	minetest.request_shutdown("Thanks for playing", false, 5)
 end
 
 minetest.register_chatcommand("surrender", {
