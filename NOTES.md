@@ -1,3 +1,4 @@
+- To keep things on a relatively even playing field the minimum Minetest version is 5.7
 - Only the team leader signs up on Challonge
 - Team leaders should join each of the tournament servers and set their team names with `/teamname` as they register on Challonge. Otherwise they will have to use their ingame name for their Challonge team name
   - Throughout the tournament you will be joining different servers depending on which ones are available, they don't sync data so you currently have to register your team in each one
