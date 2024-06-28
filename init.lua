@@ -341,8 +341,10 @@ minetest.register_chatcommand("report_dq", {
 	description = "Tell the game a player can't make it",
 	privs = {},
 	func = function(name, params)
-		if (has_team_leader(teamcolor_to_teamnum(ctf_teams.get(name))) and locked[name]) or
-			minetest.check_player_privs(player, {tournament_manager = true})
+		local player = minetest.get_player_by_name(name)
+
+		if player and ((has_team_leader(teamcolor_to_teamnum(ctf_teams.get(name))) and locked[name]) or
+			minetest.check_player_privs(name, {tournament_manager = true}))
 		then
 			CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
 
