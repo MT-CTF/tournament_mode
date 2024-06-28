@@ -1,6 +1,8 @@
 - Only the team leader signs up on Challonge
-- Team leaders should join each of the tournament servers and set their team names with `/teamname` after they register on Challonge. Otherwise they will have to use their ingame name for their Challonge team name
+- Team leaders should join each of the tournament servers and set their team names with `/teamname` as they register on Challonge. Otherwise they will have to use their ingame name for their Challonge team name
+  - Throughout the tournament you will be joining different servers depending on which ones are available, they don't sync data so you currently have to register your team in each one
   - This can be done as you're prepping for a match, but you will have to rejoin after setting your team name, and waiting that long isn't recommended
+- TODO: time limit on joining/playing
 - Team leaders are responsible for managing their team members.
   - This includes making sure they know how the tournament works and what to do. If the team leader doesn't know they can ask a tournament manager and relay the info.
   - If they don't show up on time with enough players they will have to `/surrender` or run `/report_dq` for each missing player if they still want to try playing
