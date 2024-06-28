@@ -53,8 +53,7 @@ local locked = {}
 
 ]]
 
--- All values need to be false at first
-local TEAM = {false, false}
+local TEAM = {"Team 1", "Team 2"}
 local TEAM_ID = {false, false}
 
 local TEAM_LEADER = {}
@@ -342,7 +341,9 @@ minetest.register_chatcommand("report_dq", {
 	description = "Tell the game a player can't make it",
 	privs = {},
 	func = function(name, params)
-		if has_team_leader(teamcolor_to_teamnum(ctf_teams.get(name))) and locked[name] then
+		if (has_team_leader(teamcolor_to_teamnum(ctf_teams.get(name))) and locked[name]) or
+			minetest.check_player_privs(player, {tournament_manager = true})
+		then
 			CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
 
 			return true, "Player dq reported successfully"
@@ -379,7 +380,7 @@ minetest.register_chatcommand("promo", {
 	func = function(name, params)
 		local player = minetest.get_player_by_name(name)
 
-		if player then
+		if player and minetest.check_player_privs(player, {tournament_spectator = true}) then
 			player:get_meta():set_string("spectator_promo", params:sub(1, 20))
 
 			if promohud:exists(player, "spectator_promo") then
@@ -400,7 +401,7 @@ minetest.register_chatcommand("promo", {
 
 			return true, "Promo set"
 		else
-			return false, "You must be online to run this command!"
+			return false, "You must be online/a spectator to run this command!"
 		end
 	end
 })
@@ -570,102 +571,116 @@ if API_KEY then
 	http = minetest.request_http_api()
 	assert(http, "Please add tournament_mode to secure.http_mods")
 
-	on_match_start = function()
-		if not FOR_MATCH then return false end
+	http.fetch({
+		url = TOURNAMENT_URL .. "/matches.json?state=open&api_key="..API_KEY,
+		timeout = 10,
+		method = "GET",
+	}, function(matches_res)
+		assert(matches_res.succeeded)
 
-		http.fetch({
-			url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH.."/mark_as_underway.json",
-			timeout = 10,
-			method = "POST",
-			data = {api_key = API_KEY},
-		}, function(res)
-			assert(res.succeeded, "Match ID was incorrect")
-		end)
+		-- minetest.log(dump(matches_res))
 
-		return true
-	end
+		matches_res = minetest.parse_json(matches_res.data, {})
 
-	on_new_tracked = function(pname)
-		if not minetest.get_player_by_name(pname) then
-			return
-		elseif #ctf_teams.current_team_list <= 0 then
-			minetest.after(1, on_new_tracked, pname)
-			return
-		end
+		if #matches_res > 0 then
+			TEAM = {false, false}
 
-		http.fetch({
-			url = TOURNAMENT_URL .. "/matches.json?state=open&api_key="..API_KEY,
-			timeout = 10,
-			method = "GET",
-		}, function(matches_res)
-			assert(matches_res.succeeded)
+			on_match_start = function()
+				if not FOR_MATCH then return false end
 
-			-- minetest.log(dump(matches_res))
+				http.fetch({
+					url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH.."/mark_as_underway.json",
+					timeout = 10,
+					method = "POST",
+					data = {api_key = API_KEY},
+				}, function(res)
+					assert(res.succeeded, "Match ID was incorrect")
+				end)
 
-			matches_res = minetest.parse_json(matches_res.data, {})
-
-			minetest.log(dump(#matches_res))
-
-			if #matches_res > 0 then
-				has_team_leader = function(teamnum)
-					if TEAM_LEADER[teamnum] then
-						return TEAM_LEADER[teamnum]
-					else
-						return false
-					end
-				end
-
-				local names = mods:get_string("team_names")
-				if names == "" then
-					names = {}
-				else
-					names = minetest.deserialize(names, true)
-				end
-
-				for matchidx, entry in pairs(matches_res) do
-					for team, id in pairs({entry.match.player1_id, entry.match.player2_id}) do
-						team = tonumber(team)
-
-						http.fetch({
-							url = TOURNAMENT_URL .. "/participants/" .. id .. ".json?api_key="..API_KEY,
-							timeout = 10,
-							method = "GET",
-						}, function(player_res)
-							if FOR_MATCH and #TEAM_LEADER >= 2 then return end
-
-							assert(player_res.succeeded)
-
-							-- minetest.log(dump(player_res))
-
-							player_res = minetest.parse_json(player_res.data, {}).participant
-
-							minetest.log(dump(player_res.display_name))
-							minetest.log(dump(pname))
-							minetest.log(dump(names))
-
-							if (player_res.display_name == pname or names[player_res.display_name] == pname) and
-							(not FOR_MATCH or FOR_MATCH == entry.match.id) then
-								FOR_MATCH = entry.match.id
-								TEAM_LEADER[team] = pname
-
-								locked[pname] = teamnum_to_teamcolor(tonumber(team))
-								TEAM[team] = names["p:"..pname] or pname
-								TEAM_ID[team] = player_res.id
-
-								if TEAM[team] == "" then
-									TEAM[team] = false
-								else
-									reshow_form()
-								end
-
-								minetest.chat_send_all("Found team leader "..team.." ("..TEAM[team].."): "..pname)
-							end
-						end)
-					end
-				end
+				return true
 			end
-		end)
-	end
+
+			on_new_tracked = function(pname)
+				if not minetest.get_player_by_name(pname) then
+					return
+				elseif #ctf_teams.current_team_list <= 0 then
+					minetest.after(1, on_new_tracked, pname)
+					return
+				end
+
+				http.fetch({
+					url = TOURNAMENT_URL .. "/matches.json?state=open&api_key="..API_KEY,
+					timeout = 10,
+					method = "GET",
+				}, function(matches_res)
+					assert(matches_res.succeeded)
+
+					-- minetest.log(dump(matches_res))
+
+					matches_res = minetest.parse_json(matches_res.data, {})
+
+					if #matches_res > 0 then
+						has_team_leader = function(teamnum)
+							if TEAM_LEADER[teamnum] then
+								return TEAM_LEADER[teamnum]
+							else
+								return false
+							end
+						end
+
+						local names = mods:get_string("team_names")
+						if names == "" then
+							names = {}
+						else
+							names = minetest.deserialize(names, true)
+						end
+
+						for matchidx, entry in pairs(matches_res) do
+							for team, id in pairs({entry.match.player1_id, entry.match.player2_id}) do
+								team = tonumber(team)
+
+								http.fetch({
+									url = TOURNAMENT_URL .. "/participants/" .. id .. ".json?api_key="..API_KEY,
+									timeout = 10,
+									method = "GET",
+								}, function(player_res)
+									if FOR_MATCH and #TEAM_LEADER >= 2 then return end
+
+									assert(player_res.succeeded)
+
+									-- minetest.log(dump(player_res))
+
+									player_res = minetest.parse_json(player_res.data, {}).participant
+
+									minetest.log(dump(player_res.display_name))
+									minetest.log(dump(pname))
+									minetest.log(dump(names))
+
+									if (player_res.display_name == pname or names[player_res.display_name] == pname) and
+									(not FOR_MATCH or FOR_MATCH == entry.match.id) then
+										FOR_MATCH = entry.match.id
+										TEAM_LEADER[team] = pname
+
+										locked[pname] = teamnum_to_teamcolor(tonumber(team))
+										TEAM[team] = names["p:"..pname] or pname
+										TEAM_ID[team] = player_res.id
+
+										if TEAM[team] == "" then
+											TEAM[team] = false
+										else
+											reshow_form()
+										end
+
+										minetest.chat_send_all("Found team leader "..team.." ("..TEAM[team].."): "..pname)
+									end
+								end)
+							end
+						end
+					end
+				end)
+			end
+		end
+	end)
 end
 
 local function report_win(teamnum)
@@ -692,7 +707,6 @@ end
 
 minetest.register_chatcommand("surrender", {
 	description = "Give the other team the win",
-	privs = {},
 	func = function(name)
 		local tnum = teamcolor_to_teamnum(ctf_teams.get(name))
 
