@@ -577,14 +577,14 @@ if API_KEY then
 		url = TOURNAMENT_URL .. "/matches.json?state=open&api_key="..API_KEY,
 		timeout = 10,
 		method = "GET",
-	}, function(matches_res)
-		assert(matches_res.succeeded)
+	}, function(checktournament)
+		assert(checktournament.succeeded)
 
-		-- minetest.log(dump(matches_res))
+		-- minetest.log(dump(checktournament))
 
-		matches_res = minetest.parse_json(matches_res.data, {})
+		checktournament = minetest.parse_json(checktournament.data, {})
 
-		if #matches_res > 0 then
+		if #checktournament > 0 then
 			TEAM = {false, false}
 
 			on_match_start = function()
