@@ -585,6 +585,7 @@ if API_KEY then
 		checktournament = minetest.parse_json(checktournament.data, {})
 
 		if #checktournament > 0 then
+			minetest.log("action", "Tournament Started")
 			TEAM = {false, false}
 
 			on_match_start = function()
@@ -654,9 +655,9 @@ if API_KEY then
 
 									player_res = minetest.parse_json(player_res.data, {}).participant
 
-									minetest.log(dump(player_res.display_name))
-									minetest.log(dump(pname))
-									minetest.log(dump(names))
+									minetest.log("action", dump(player_res.display_name))
+									minetest.log("action", dump(pname))
+									minetest.log("action", dump(names))
 
 									if (player_res.display_name == pname or names[player_res.display_name] == pname) and
 									(not FOR_MATCH or FOR_MATCH == entry.match.id) then
