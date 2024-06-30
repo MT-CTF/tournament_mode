@@ -96,6 +96,8 @@ local function reshow_form(except)
 end
 
 showform = function(player)
+	if minetest.check_player_privs(player, {tournament_spectator = true}) then return end
+
 	local playername = player:get_player_name()
 
 	if locked[playername] then
@@ -167,6 +169,8 @@ showform = function(player)
 	, {
 		player = player,
 		_on_formspec_input = function(pname, context, fields)
+			if minetest.check_player_privs(pname, {tournament_spectator = true}) then return end
+
 			if fields.select_team1 and not locked[pname] then
 				ctf_teams.remove_online_player(pname)
 				ctf_teams.set(pname, ctf_teams.current_team_list[1], true)
@@ -241,7 +245,7 @@ minetest.register_chatcommand("teamform", {
 	func = function(name)
 		local player = minetest.get_player_by_name(name)
 
-		if player and not match_started then
+		if player and not match_started and not minetest.check_player_privs(name, {tournament_spectator = true}) then
 			showform(player)
 		end
 	end
@@ -460,6 +464,41 @@ minetest.register_on_leaveplayer(function(player)
 	end
 end)
 
+local function init_spectator(p)
+	p:hud_set_flags({
+		hotbar = false,
+		healthbar = false,
+		crosshair = false,
+		wielditem = false,
+		breathbar = false,
+		minimap = false,
+		minimap_radar = false,
+		basic_debug = false,
+		chat = false,
+	})
+
+	p:set_properties({
+		makes_footstep_sound = false,
+	})
+
+	for id, def in pairs(p:hud_get_all()) do
+		if def.type == "statbar" then
+			p:hud_change(id, "position", {x = -10, y = -10})
+		end
+	end
+
+	hud:add(p, "match_info", {
+		hud_elem_type = "text",
+		position = {x = 0.5, y = 0},
+		alignment = {x = "center", y = "down"},
+		color = 0xFFFFFF,
+		text_scale = 3,
+		text = minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
+				" vs " ..
+				minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
+	})
+end
+
 local timer = 0
 minetest.register_globalstep(function(dtime)
 	if match_started then return end
@@ -481,47 +520,16 @@ minetest.register_globalstep(function(dtime)
 						if not minetest.check_player_privs(p, {tournament_spectator = true}) then
 							minetest.kick_player(p:get_player_name(), "Only official spectators are allowed when a match is started")
 						else
-							p:hud_set_flags({
-								hotbar = false,
-								healthbar = false,
-								crosshair = false,
-								wielditem = false,
-								breathbar = false,
-								minimap = false,
-								minimap_radar = false,
-								basic_debug = false,
-								chat = false,
-							})
-
-							p:set_properties({
-								makes_footstep_sound = false,
-							})
-
-							for id, def in pairs(p:hud_get_all()) do
-								if def.type == "statbar" then
-									p:hud_change(id, "position", {x = -10, y = -10})
-								end
-							end
-
-							hud:add(p, "match_info", {
-								hud_elem_type = "text",
-								position = {x = 0.5, y = 0},
-								alignment = {x = "center", y = "down"},
-								color = 0xFFFFFF,
-								text_scale = 3,
-								text = minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
-										" vs " ..
-										minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
-							})
+							init_spectator(p)
 						end
 					end
 				end
 
-				for _, tdef in pairs(ctf_teams.online_players) do
+				for tname, tdef in pairs(ctf_teams.online_players) do
 					for name in pairs(tdef.players) do
 						local player = minetest.get_player_by_name(name)
 
-						if player then
+						if player and tname ~= "spectator" then
 							minetest.change_player_privs(name, {
 								interact = true,
 								fly = false, noclip = false, fast = false,
@@ -531,8 +539,11 @@ minetest.register_globalstep(function(dtime)
 							player:set_armor_groups(groups)
 							minetest.log("action", dump(player:get_armor_groups()))
 
-							if player.observers then -- Need to account for the pre-5.9 alternative if set up
+							if player.set_observers then
 								player:set_observers(nil)
+								minetest.log("Reset observers for "..name)
+							else
+								player:set_properties({visible = true})
 							end
 
 							features.tp_player_near_flag(player)
@@ -881,8 +892,14 @@ ctf_modebase.register_mode("tournament", {
 				groups.immortal = 1
 				player:set_armor_groups(groups)
 
-				if player.observers then -- Need to set up a pre-5.9 alternative
-					player:set_observers({[player:get_player_name()] = false})
+				if match_started then
+					init_spectator(player)
+				end
+
+				if player.set_observers then
+					player:set_observers({[player:get_player_name()] = true})
+				else
+					player:set_properties({visible = false})
 				end
 			end
 		end
