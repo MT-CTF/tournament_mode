@@ -756,7 +756,7 @@ if API_KEY and TOURNAMENT_ID then
 							)
 						end
 
-						minetest.chat_send_player(name, dump(player_res:sub(1, -2)))
+						minetest.chat_send_player(name, dump(out:sub(1, -2)))
 					end)
 
 					return true
