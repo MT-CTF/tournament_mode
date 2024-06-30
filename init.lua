@@ -2,7 +2,6 @@ local rankings = ctf_rankings.init()
 local hud = mhud.init()
 local recent_rankings = ctf_modebase.recent_rankings(rankings)
 local features = ctf_modebase.features(rankings, recent_rankings)
-local mods = minetest.get_mod_storage()
 
 local classes = ctf_core.include_files(
 	"classes.lua",
@@ -153,7 +152,7 @@ showform = function(player)
 						"button_exit[%f,%f;3,1;confirm;%s]",
 						(w/2) - (3/2),
 						9 + py,
-						locked[playername] and "Team Is Ready" or "Confirm Team"
+						locked[playername] and "Confirm Ready" or "Confirm Team"
 					})
 				else
 					table.insert(out, "style[confirm_disabled;font=bold;textcolor=grey]")
@@ -220,6 +219,13 @@ showform = function(player)
 			else
 				if fields.quit then
 					form_shown[pname] = nil
+
+					-- note: legit spectators can't reach this point in the code
+					if ctf_teams.get(pname) == "spectator" then
+						minetest.chat_send_player(pname,
+							"[NOTICE] Unless you are made an official spectator or join a team you will be kicked when the match starts"
+						)
+					end
 				end
 			end
 
@@ -251,60 +257,6 @@ minetest.register_chatcommand("teamform", {
 	end
 })
 
-minetest.register_chatcommand("teamname", {
-	description = "Set the name of your team",
-	func = function(name, teamname)
-		local player = minetest.get_player_by_name(name)
-
-		if not player then
-			return false, "You need to be online to run this command"
-		end
-
-		local names = mods:get_string("team_names")
-
-		if names == "" then
-			names = {}
-		else
-			names = minetest.deserialize(names, true)
-		end
-
-		if teamname == "" then
-			if names["p:"..name] then
-				return true, "The name of your team is \"" .. names["p:"..name] .. "\""
-			else
-				return true, "You haven't set a team name"
-			end
-		end
-
-		if not names[teamname] then
-			if names["p:"..name] then
-				names[names["p:"..name]] = nil
-				names["p:"..name] = nil
-			end
-
-			names[teamname] = name
-			names["p:"..name] = teamname
-		else
-			return false, "The team name \"" .. teamname .. "\" is claimed by " .. names[teamname]
-		end
-
-		mods:set_string("team_names", minetest.serialize(names))
-
-		if locked[name] then
-			TEAM[teamcolor_to_teamnum(locked[name])] = teamname
-
-			reshow_form()
-
-			return true, "Team name set to \"" .. teamname .. "\""
-		else
-			minetest.kick_player(
-				name,
-				"Team name set to \"" .. teamname .. "\". You may rejoin if you are meant to play a match on this server"
-			)
-		end
-	end
-})
-
 minetest.register_on_leaveplayer(function(player)
 	local idx = table.indexof(confirmed, player:get_player_name())
 
@@ -313,6 +265,7 @@ minetest.register_on_leaveplayer(function(player)
 	end
 
 	form_shown[player:get_player_name()] = nil
+	reshow_form()
 end)
 
 --[[
@@ -347,14 +300,14 @@ minetest.register_chatcommand("report_dq", {
 	func = function(name, params)
 		local player = minetest.get_player_by_name(name)
 
-		if player and ((has_team_leader(teamcolor_to_teamnum(ctf_teams.get(name))) and locked[name]) or
+		if player and ((locked[name] and TEAM_LEADER[locked[name]]) or
 			minetest.check_player_privs(name, {tournament_manager = true}))
 		then
 			CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
 
 			return true, "Player dq reported successfully"
 		else
-			return false, "You need to be a team leader to run this command"
+			return false, "You need to be a team leader/tournament manager to run this command"
 		end
 	end
 })
@@ -601,6 +554,27 @@ if API_KEY and TOURNAMENT_ID then
 			minetest.log("action", "Tournament Started")
 			TEAM = {false, false}
 
+			local function parse_team_members(json_entry)
+				local players = {}
+				local smallest = math.huge
+				local leader = 1
+
+				for id, v in pairs(json_entry.participant.custom_field_response) do
+					if type(v) == "string" then
+						if tonumber(id) < smallest then
+							smallest = tonumber(id)
+							leader = #players+1
+						end
+
+						table.insert(players, v)
+					end
+				end
+
+				leader = table.remove(players, leader)
+
+				return leader, players
+			end
+
 			has_team_leader = function(teamnum)
 				if TEAM_LEADER[teamnum] then
 					return TEAM_LEADER[teamnum]
@@ -644,14 +618,7 @@ if API_KEY and TOURNAMENT_ID then
 					matches_res = minetest.parse_json(matches_res.data, {})
 
 					if #matches_res > 0 then
-
-						local names = mods:get_string("team_names")
-						if names == "" then
-							names = {}
-						else
-							names = minetest.deserialize(names, true)
-						end
-
+						local found = {}
 						for matchidx, entry in pairs(matches_res) do
 							for team, id in pairs({entry.match.player1_id, entry.match.player2_id}) do
 								team = tonumber(team)
@@ -661,8 +628,8 @@ if API_KEY and TOURNAMENT_ID then
 									timeout = 10,
 									method = "GET",
 								}, function(player_res)
-									if FOR_MATCH and TEAM_LEADER[1] and TEAM_LEADER[2] then
-										minetest.log("action", dump(FOR_MATCH) .. " " .. dump(TEAM_LEADER))
+									if FOR_MATCH and found[pname] then
+										-- minetest.log("action", dump(FOR_MATCH) .. " " .. dump(pname))
 										return
 									end
 
@@ -670,28 +637,31 @@ if API_KEY and TOURNAMENT_ID then
 
 									-- minetest.log(dump(player_res))
 
-									player_res = minetest.parse_json(player_res.data, {}).participant
+									player_res = minetest.parse_json(player_res.data, {})
 
-									minetest.log("action", dump(player_res.display_name))
-									minetest.log("action", dump(pname))
-									minetest.log("action", dump(names))
+									local leader, players = parse_team_members(player_res)
 
-									if (player_res.display_name == pname or names[player_res.display_name] == pname) and
-									(not FOR_MATCH or FOR_MATCH == entry.match.id) then
-										FOR_MATCH = entry.match.id
-										TEAM_LEADER[team] = pname
+									if (not FOR_MATCH or FOR_MATCH == entry.match.id) then
+										if leader == pname or table.indexof(players, pname) ~= -1 then
+											TEAM[team] = player_res.participant.display_name
+											TEAM_ID[team] = player_res.participant.id
 
-										locked[pname] = teamnum_to_teamcolor(tonumber(team))
-										TEAM[team] = names["p:"..pname] or pname
-										TEAM_ID[team] = player_res.id
+											if leader == pname then
+												TEAM_LEADER[team] = pname
+												minetest.chat_send_all("Found team leader "..team.." ("..TEAM[team].."): "..pname)
+											else
+												minetest.chat_send_all("Found team member "..team.." ("..TEAM[team].."): "..pname)
+											end
 
-										if TEAM[team] == "" then
-											TEAM[team] = false
-										else
-											reshow_form()
+											locked[pname] = teamnum_to_teamcolor(tonumber(team))
+											FOR_MATCH = entry.match.id
+
+											if TEAM[team] == "" then
+												TEAM[team] = false
+											else
+												reshow_form()
+											end
 										end
-
-										minetest.chat_send_all("Found team leader "..team.." ("..TEAM[team].."): "..pname)
 									end
 								end)
 							end
@@ -731,22 +701,7 @@ if API_KEY and TOURNAMENT_ID then
 						local out = "List of teams in tournament:\n"
 
 						for _, entry in ipairs(player_res) do
-							local players = {}
-							local smallest = math.huge
-							local leader = 1
-
-							for id, v in pairs(entry.participant.custom_field_response) do
-								if type(v) == "string" then
-									if tonumber(id) < smallest then
-										smallest = tonumber(id)
-										leader = #players+1
-									end
-
-									table.insert(players, v)
-								end
-							end
-
-							leader = table.remove(players, leader)
+							local leader, players = parse_team_members(entry)
 
 							out = out .. string.format(
 								"    Team %s (Leader: %s)\n        Members: %s\n",
