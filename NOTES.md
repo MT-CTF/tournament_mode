@@ -1,6 +1,9 @@
 This is a 3v3 double elimination tournament. Challonge shows 1v1 because only team leaders register.
-Two teams of 3 face off against each other, the team that captures the other's flag wins. The winner moves on to play against other winners, and the loser moves into the lower bracket, where they will fight other teams that lost.
+Two teams of 3 face off against each other in a classes match, the team that captures the other's flag wins. The winner moves on to play against other winners, and the loser moves into the lower bracket, where they will fight other teams that lost.
 If you lose twice you're out of the tournament. At the end of the tournament you'll have the winners bracket team (the only one that hasn't lost) vs the surviving lower bracket team, and if the lower bracket team can defeat the winner's bracket one twice they win the tournament.
+
+When a match starts an email will be sent to the participating team leaders letting them know and giving them the address of the server to play on.
+They can then join and start playing, or arrange a time to play if someone can't make it.
 
 - To keep things on a relatively even playing field the minimum Minetest version is 5.7
 - Only the team leader signs up on Challonge
@@ -20,3 +23,5 @@ If you lose twice you're out of the tournament. At the end of the tournament you
 
 
 - TODO: time limit on joining/playing
+-  you can invite friends that aren't in the Discord, but you have to be able to reliably coordinate with them to get your team into matches
+- CSM are allowed if they give no advantage
