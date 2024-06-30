@@ -737,7 +737,8 @@ if API_KEY and TOURNAMENT_ID then
 
 							for id, v in pairs(entry.participant.custom_field_response) do
 								if type(v) == "string" then
-									if id > biggest_id then
+									if tonumber(id) > biggest_id then
+										biggest_id = tonumber(id)
 										leader = #players+1
 									end
 
