@@ -524,7 +524,7 @@ minetest.register_globalstep(function(dtime)
 						if player then
 							minetest.change_player_privs(name, {
 								interact = true,
-								fly = false, noclip = false,
+								fly = false, noclip = false, fast = false,
 							})
 							local groups = player:get_armor_groups()
 							groups.immortal = nil
@@ -874,7 +874,7 @@ ctf_modebase.register_mode("tournament", {
 			if new_team == "spectator" then
 				minetest.change_player_privs(player:get_player_name(), {
 					interact = false,
-					fly = true, noclip = true,
+					fly = true, noclip = true, fast = true,
 				})
 
 				local groups = player:get_armor_groups()
