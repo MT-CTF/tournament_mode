@@ -551,7 +551,7 @@ minetest.register_globalstep(function(dtime)
 					end
 				end
 
-				ctf_modebase.build_timer.start(100)
+				ctf_modebase.build_timer.start(60 * 3)
 			end
 		end
 	end
