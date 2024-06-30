@@ -650,7 +650,10 @@ if API_KEY and TOURNAMENT_ID then
 									timeout = 10,
 									method = "GET",
 								}, function(player_res)
-									if FOR_MATCH and #TEAM_LEADER >= 2 then return end
+									if FOR_MATCH and TEAM_LEADER[1] and TEAM_LEADER[2] then
+										minetest.log("action", dump(FOR_MATCH) .. " " .. dump(TEAM_LEADER))
+										return
+									end
 
 									assert(player_res.succeeded)
 
