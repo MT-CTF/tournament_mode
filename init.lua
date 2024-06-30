@@ -732,13 +732,13 @@ if API_KEY and TOURNAMENT_ID then
 
 						for _, entry in ipairs(player_res) do
 							local players = {}
-							local biggest_id = -1
+							local smallest = math.huge
 							local leader = 1
 
 							for id, v in pairs(entry.participant.custom_field_response) do
 								if type(v) == "string" then
-									if tonumber(id) > biggest_id then
-										biggest_id = tonumber(id)
+									if tonumber(id) < smallest then
+										smallest = tonumber(id)
 										leader = #players+1
 									end
 
@@ -749,14 +749,14 @@ if API_KEY and TOURNAMENT_ID then
 							leader = table.remove(players, leader)
 
 							out = out .. string.format(
-								"Team %s (Leader: %s)\n\tMembers: %s\n",
-								entry.participant.display_name,
+								"    Team %s (Leader: %s)\n        Members: %s\n",
+								minetest.colorize("cyan", entry.participant.display_name),
 								leader,
 								table.concat(players, ", ")
 							)
 						end
 
-						minetest.chat_send_player(name, dump(out:sub(1, -2)))
+						minetest.chat_send_player(name, out:sub(1, -2))
 					end)
 
 					return true
