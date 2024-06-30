@@ -361,7 +361,7 @@ minetest.register_on_joinplayer(function(player)
 	if minetest.check_player_privs(player, {tournament_spectator = true}) then
 		local promo = player:get_meta():get_string("spectator_promo")
 
-		if promo == "" then promo = "Set this text with /plug" end
+		if promo == "" then promo = "Set this text with /promo" end
 
 		promohud:add(player, "spectator_promo", {
 			hud_elem_type = "text",
@@ -438,6 +438,7 @@ minetest.register_on_joinplayer(function(player)
 	if minetest.check_player_privs(player, {tournament_manager   = true}) or
 	   minetest.check_player_privs(player, {tournament_spectator = true})
 	then
+		minetest.chat_send_player(pname, "Not checking your team, as you're a manager/spectator")
 		return
 	end
 
@@ -525,8 +526,10 @@ minetest.register_globalstep(function(dtime)
 								interact = true,
 								fly = false, noclip = false,
 							})
-
-							player:set_armor_groups({ immortal = 0 })
+							local groups = player:get_armor_groups()
+							groups.immortal = nil
+							player:set_armor_groups(groups)
+							minetest.log("action", dump(player:get_armor_groups()))
 
 							if player.observers then -- Need to account for the pre-5.9 alternative if set up
 								player:set_observers(nil)
@@ -564,8 +567,7 @@ local API_KEY = minetest.settings:get("tournament_mode_api_key")
 local TOURNAMENT_ID = minetest.settings:get("tournament_mode_tournament_id")
 local STATION_ID = minetest.settings:get("tournament_mode_station_id") or 1
 
-if API_KEY then
-	assert(TOURNAMENT_ID, "Please set tournament_mode_tournament_id")
+if API_KEY and TOURNAMENT_ID then
 	assert(STATION_ID, "Please set tournament_mode_station_id")
 
 	TOURNAMENT_URL = "https://api.challonge.com/v1/tournaments/" .. TOURNAMENT_ID
@@ -587,6 +589,14 @@ if API_KEY then
 		if #checktournament > 0 then
 			minetest.log("action", "Tournament Started")
 			TEAM = {false, false}
+
+			has_team_leader = function(teamnum)
+				if TEAM_LEADER[teamnum] then
+					return TEAM_LEADER[teamnum]
+				else
+					return false
+				end
+			end
 
 			on_match_start = function()
 				if not FOR_MATCH then return false end
@@ -623,13 +633,6 @@ if API_KEY then
 					matches_res = minetest.parse_json(matches_res.data, {})
 
 					if #matches_res > 0 then
-						has_team_leader = function(teamnum)
-							if TEAM_LEADER[teamnum] then
-								return TEAM_LEADER[teamnum]
-							else
-								return false
-							end
-						end
 
 						local names = mods:get_string("team_names")
 						if names == "" then
@@ -871,7 +874,9 @@ ctf_modebase.register_mode("tournament", {
 					fly = true, noclip = true,
 				})
 
-				player:set_armor_groups({ immortal = 1 })
+				local groups = player:get_armor_groups()
+				groups.immortal = 1
+				player:set_armor_groups(groups)
 
 				if player.observers then -- Need to set up a pre-5.9 alternative
 					player:set_observers({[player:get_player_name()] = false})
