@@ -521,6 +521,54 @@ if API_KEY and TOURNAMENT_ID then
 
 		checktournament = minetest.parse_json(checktournament.data, {})
 
+		local cmd_timer = os.time()
+		minetest.register_chatcommand("tournament_teams", {
+			description = "List the current teams",
+			func = function(name, params)
+				if os.time() - cmd_timer <= 5 then
+					return false, "This command is being run too fast!"
+				else
+					cmd_timer = os.time()
+				end
+
+				http.fetch({
+					url = TOURNAMENT_URL .. "/participants.json?api_key="..API_KEY,
+					timeout = 5,
+					method = "GET",
+				}, function(player_res)
+					if FOR_MATCH and TEAM_LEADER[1] and TEAM_LEADER[2] then
+						minetest.log("action", dump(FOR_MATCH) .. " " .. dump(TEAM_LEADER))
+						return
+					end
+
+					if not player_res.succeeded then
+						minetest.log("error", "Issue with /tournament_teams")
+						minetest.log("action", dump(player_res))
+						return
+					end
+
+					player_res = minetest.parse_json(player_res.data, {})
+
+					local out = "List of teams in tournament:\n"
+
+					for _, entry in ipairs(player_res) do
+						local leader, players = parse_team_members(entry)
+
+						out = out .. string.format(
+							"    Team %s (Leader: %s)\n        Members: %s\n",
+							minetest.colorize("cyan", entry.participant.display_name),
+							leader,
+							table.concat(players, ", ")
+						)
+					end
+
+					minetest.chat_send_player(name, out:sub(1, -2))
+				end)
+
+				return true
+			end,
+		})
+
 		if #checktournament > 0 then
 			minetest.log("action", "Tournament Started")
 			TEAM = {false, false}
@@ -622,54 +670,6 @@ if API_KEY and TOURNAMENT_ID then
 					end
 				end)
 			end
-
-			local cmd_timer = os.time()
-			minetest.register_chatcommand("tournament_teams", {
-				description = "List the current teams",
-				func = function(name, params)
-					if os.time() - cmd_timer <= 5 then
-						return false, "This command is being run too fast!"
-					else
-						cmd_timer = os.time()
-					end
-
-					http.fetch({
-						url = TOURNAMENT_URL .. "/participants.json?api_key="..API_KEY,
-						timeout = 5,
-						method = "GET",
-					}, function(player_res)
-						if FOR_MATCH and TEAM_LEADER[1] and TEAM_LEADER[2] then
-							minetest.log("action", dump(FOR_MATCH) .. " " .. dump(TEAM_LEADER))
-							return
-						end
-
-						if not player_res.succeeded then
-							minetest.log("error", "Issue with /tournament_teams")
-							minetest.log("action", dump(player_res))
-							return
-						end
-
-						player_res = minetest.parse_json(player_res.data, {})
-
-						local out = "List of teams in tournament:\n"
-
-						for _, entry in ipairs(player_res) do
-							local leader, players = parse_team_members(entry)
-
-							out = out .. string.format(
-								"    Team %s (Leader: %s)\n        Members: %s\n",
-								minetest.colorize("cyan", entry.participant.display_name),
-								leader,
-								table.concat(players, ", ")
-							)
-						end
-
-						minetest.chat_send_player(name, out:sub(1, -2))
-					end)
-
-					return true
-				end,
-			})
 		end
 	end)
 end

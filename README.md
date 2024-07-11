@@ -11,3 +11,5 @@ Custom fields setup should look like this, in order:
 - `Team Leader Username (Text, required)`
 - `Team Member Username (Text, required)`
 - `Team Member Username (Text, required)`
+
+You can set up stations for each server you have and have them automatically assigned too
