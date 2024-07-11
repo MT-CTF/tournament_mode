@@ -521,6 +521,27 @@ if API_KEY and TOURNAMENT_ID then
 
 		checktournament = minetest.parse_json(checktournament.data, {})
 
+		local function parse_team_members(json_entry)
+			local players = {}
+			local smallest = math.huge
+			local leader = 1
+
+			for id, v in pairs(json_entry.participant.custom_field_response) do
+				if type(v) == "string" then
+					if tonumber(id) < smallest then
+						smallest = tonumber(id)
+						leader = #players+1
+					end
+
+					table.insert(players, v)
+				end
+			end
+
+			leader = table.remove(players, leader)
+
+			return leader, players
+		end
+
 		local cmd_timer = os.time()
 		minetest.register_chatcommand("tournament_teams", {
 			description = "List the current teams",
@@ -572,27 +593,6 @@ if API_KEY and TOURNAMENT_ID then
 		if #checktournament > 0 then
 			minetest.log("action", "Tournament Started")
 			TEAM = {false, false}
-
-			local function parse_team_members(json_entry)
-				local players = {}
-				local smallest = math.huge
-				local leader = 1
-
-				for id, v in pairs(json_entry.participant.custom_field_response) do
-					if type(v) == "string" then
-						if tonumber(id) < smallest then
-							smallest = tonumber(id)
-							leader = #players+1
-						end
-
-						table.insert(players, v)
-					end
-				end
-
-				leader = table.remove(players, leader)
-
-				return leader, players
-			end
 
 			has_team_leader = function(teamnum)
 				if TEAM_LEADER[teamnum] then
