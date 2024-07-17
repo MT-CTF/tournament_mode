@@ -9,7 +9,7 @@ local classes = ctf_core.include_files(
 	"spectators.lua"
 )
 
-local TEAM_SIZE = 1 --players each
+local TEAM_SIZE = 3 --players each
 local CONFIRMED_PLAYER_TARGET = TEAM_SIZE * 2
 
 local old_bounty_reward_func = ctf_modebase.bounties.bounty_reward_func
