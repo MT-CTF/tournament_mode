@@ -37,7 +37,8 @@ custom_item_levels.pick   = prioritize_medic_paxel("pick"  )
 custom_item_levels.axe    = prioritize_medic_paxel("axe"   )
 custom_item_levels.shovel = prioritize_medic_paxel("shovel")
 
-local match_started = false
+local MATCH_STARTED = false
+local QUEUE_MATCH_END = false
 local confirmed = {}
 local locked = {}
 
@@ -306,7 +307,7 @@ minetest.register_chatcommand("teamform", {
 	func = function(name)
 		local player = minetest.get_player_by_name(name)
 
-		if player and not match_started then
+		if player and not MATCH_STARTED then
 			showform(player)
 		end
 	end
@@ -355,7 +356,7 @@ minetest.register_chatcommand("report_dq", {
 	func = function(name, params)
 		local player = minetest.get_player_by_name(name)
 
-		if player and ((locked[name] and TEAM_LEADER[locked[name]]) or
+		if player and ((locked[name] and (TEAM_LEADER[1] == locked[name] or TEAM_LEADER[2] == locked[name])) or
 			minetest.check_player_privs(name, {tournament_manager = true}))
 		then
 			CONFIRMED_PLAYER_TARGET = CONFIRMED_PLAYER_TARGET - 1
@@ -436,7 +437,7 @@ local function on_new_tracked(pname)
 end
 
 minetest.register_on_prejoinplayer(function(name)
-	if match_started then
+	if MATCH_STARTED then
 		if minetest.check_player_privs(name, {tournament_manager   = true}) or
 		   minetest.check_player_privs(name, {tournament_spectator = true}) or
 		   allow_rejoin[name]
@@ -464,7 +465,7 @@ minetest.register_on_joinplayer(function(player)
 		on_new_tracked(player:get_player_name())
 	end
 
-	if not match_started then
+	if not MATCH_STARTED then
 		player = minetest.get_player_by_name(pname)
 
 		if player then
@@ -476,7 +477,7 @@ end)
 minetest.register_on_leaveplayer(function(player)
 	local name = player:get_player_name()
 
-	if match_started then
+	if MATCH_STARTED then
 		allow_rejoin[name] = true
 	end
 
@@ -484,45 +485,6 @@ minetest.register_on_leaveplayer(function(player)
 
 	if idx >= 1 then
 		table.remove(tracked_players, idx)
-	end
-end)
-
-local timer = 0
-minetest.register_globalstep(function(dtime)
-	if match_started then return end
-	if #tracked_players < CONFIRMED_PLAYER_TARGET then return end
-
-	timer = timer + dtime
-
-	if timer >= 1 then
-		timer = 0
-
-		if TEAM[1] and TEAM[2] and #confirmed >= CONFIRMED_PLAYER_TARGET then
-			-- trim extra players out, prioritize players locked in by Challonge
-			if #confirmed > CONFIRMED_PLAYER_TARGET then
-				local confirmed_only = {{}, {}}
-				local locked_p = {{}, {}}
-
-				for idx, p in ipairs(confirmed) do
-					if not locked_p[p] then
-						table.insert(confirmed_only[selected_team[p]], p)
-					else
-						table.insert(locked_p[selected_team[p]], p)
-					end
-				end
-
-				for _, tm in pairs({1, 2}) do
-					for i = #confirmed_only[tm] + #locked_p[tm], TEAM_SIZE+1, -1 do
-						local p = table.remove(confirmed, table.indexof(confirmed, confirmed_only[tm][1]))
-						table.remove(confirmed_only[tm], 1)
-
-						minetest.kick_player(p, "Kicked due to your team having too many teammates")
-					end
-				end
-			end
-
-			start_new_match()
-		end
 	end
 end)
 
@@ -872,7 +834,7 @@ ctf_modebase.register_mode("tournament", {
 		hud:clear_all()
 
 		ctf_modebase.build_timer.start(60 * 3)
-		match_started = true
+		MATCH_STARTED = true
 	end,
 	on_match_end = function(...)
 		features.on_match_end(...)
@@ -880,8 +842,6 @@ ctf_modebase.register_mode("tournament", {
 	allocate_teams = function(map_teams, dont_allocate_players, ...)
 		local teams = table.copy(map_teams)
 		teams["spectator"] = {}
-
-		minetest.log(dump(map_teams))
 
 		local out = ctf_teams.allocate_teams(teams, true, ...)
 
@@ -975,12 +935,6 @@ ctf_modebase.register_mode("tournament", {
 							minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
 				})
 
-				minetest.log(dump(ctf_teams.team).." [1] = "..teamnum_to_teamcolor(1).." | [2] = "..teamnum_to_teamcolor(2))
-
-				minetest.chat_send_all(minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
-				" vs " ..
-				minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2]))
-
 				if player.set_observers then
 					player:set_observers({[player:get_player_name()] = true})
 				end
@@ -1006,7 +960,45 @@ ctf_modebase.register_mode("tournament", {
 		classes.reset_class_cooldowns(player)
 	end,
 	can_take_flag = features.can_take_flag,
-	on_flag_take = features.on_flag_take,
+	on_flag_take = function(player, teamname, ...)
+		local out = features.on_flag_take(player, teamname, ...)
+
+		for _, p in pairs(minetest.get_connected_players()) do
+			if ctf_teams.get(p) ~= "spectator" then
+				if not hud:exists(p, "attempt_info") then
+					hud:add(p, "attempt_info", {
+						hud_elem_type = "text",
+						position = {x = 0.5, y = 1},
+						offset = {x = 0, y = -112},
+						alignment = {x = "center", y = "up"},
+						color = 0xFFFFFF,
+						text = minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
+							string.format(" (%d) vs (%d) ",
+								recent_rankings.teams()[teamnum_to_teamcolor(1)].flag_attempts or 0,
+								recent_rankings.teams()[teamnum_to_teamcolor(2)].flag_attempts or 0
+							) ..
+							minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
+					})
+				else
+					hud:change(p, "attempt_info", {
+						text = minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
+							string.format(" (%d) vs (%d) ",
+								recent_rankings.teams()[teamnum_to_teamcolor(1)].flag_attempts or 0,
+								recent_rankings.teams()[teamnum_to_teamcolor(2)].flag_attempts or 0
+							) ..
+							minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
+					})
+				end
+			end
+		end
+
+		if QUEUE_MATCH_END then
+			features.on_flag_capture(player, {teamname})
+			minetest.after(5, report_win, teamcolor_to_teamnum(ctf_teams.get(player)))
+		end
+
+		return out
+	end,
 	on_flag_drop = features.on_flag_drop,
 	on_flag_capture = function(capturer, teams, ...)
 		local teamnum = teamcolor_to_teamnum(ctf_teams.get(capturer))
@@ -1030,3 +1022,109 @@ ctf_modebase.register_mode("tournament", {
 		end
 	end,
 })
+
+--[[
+
+   __  __       _       _        _____ _             _         __  ______           _
+  |  \/  |     | |     | |      / ____| |           | |       / / |  ____|         | |
+  | \  / | __ _| |_ ___| |__   | (___ | |_ __ _ _ __| |_     / /  | |__   _ __   __| |
+  | |\/| |/ _` | __/ __| '_ \   \___ \| __/ _` | '__| __|   / /   |  __| | '_ \ / _` |
+  | |  | | (_| | || (__| | | |  ____) | || (_| | |  | |_   / /    | |____| | | | (_| |
+  |_|  |_|\__,_|\__\___|_| |_| |_____/ \__\__,_|_|   \__| /_/     |______|_| |_|\__,_|
+
+]]
+
+local timer = 0
+minetest.register_globalstep(function(dtime)
+	if MATCH_STARTED then return end
+	if #tracked_players < CONFIRMED_PLAYER_TARGET then return end
+
+	timer = timer + dtime
+
+	if timer >= 1 then
+		timer = 0
+
+		if TEAM[1] and TEAM[2] and #confirmed >= CONFIRMED_PLAYER_TARGET then
+			-- trim extra players out, prioritize players locked in by Challonge
+			if #confirmed > CONFIRMED_PLAYER_TARGET then
+				local confirmed_only = {{}, {}}
+				local locked_p = {{}, {}}
+
+				for idx, p in ipairs(confirmed) do
+					if not locked_p[p] then
+						table.insert(confirmed_only[selected_team[p]], p)
+					else
+						table.insert(locked_p[selected_team[p]], p)
+					end
+				end
+
+				for _, tm in pairs({1, 2}) do
+					for i = #confirmed_only[tm] + #locked_p[tm], TEAM_SIZE+1, -1 do
+						local p = table.remove(confirmed, table.indexof(confirmed, confirmed_only[tm][1]))
+						table.remove(confirmed_only[tm], 1)
+
+						minetest.kick_player(p, "Kicked due to your team having too many teammates")
+					end
+				end
+			end
+
+			minetest.after(25 * 60, function()
+				minetest.chat_send_all("\n" ..
+					minetest.colorize("green", "[ANNOUNCEMENT]") ..
+					" In 5 minutes the match will end, and the team with the most attempts will win\n\n"
+				)
+
+				minetest.after(5 * 60, function()
+					local players = recent_rankings.players()
+					local teams = recent_rankings.teams()
+					local attempts_1 = teams[teamnum_to_teamcolor(1)].flag_attempts or 0
+					local attempts_2 = teams[teamnum_to_teamcolor(2)].flag_attempts or 0
+
+					if attempts_1 == attempts_2 then
+						QUEUE_MATCH_END = true
+						minetest.chat_send_all("\n" ..
+							minetest.colorize("green", "[ANNOUNCEMENT]") ..
+							" The next team to grab a flag will win\n\n"
+						)
+					elseif attempts_1 > attempts_2 then
+						local best, best_count = false, -1
+
+						for player, scores in pairs(players) do
+							scores.flag_attempts = scores.flag_attempts or 0
+
+							if scores._team == teamnum_to_teamcolor(1) and scores.flag_attempts > best_count then
+								best = player
+								best_count = scores.flag_attempts
+							end
+						end
+
+						if best then
+							features.on_flag_capture(PlayerObj(best), {teamnum_to_teamcolor(2)})
+						end
+
+						report_win(attempts_1)
+					else
+						local best, best_count
+
+						for player, scores in pairs(players) do
+							scores.flag_attempts = scores.flag_attempts or 0
+
+							if scores._team == teamnum_to_teamcolor(2) and scores.flag_attempts > best_count then
+								best = player
+								best_count = scores.flag_attempts
+							end
+						end
+
+						if best then
+							features.on_flag_capture(PlayerObj(best), {teamnum_to_teamcolor(1)})
+						end
+
+						report_win(attempts_2)
+					end
+				end)
+			end)
+
+			start_new_match()
+		end
+	end
+end)
