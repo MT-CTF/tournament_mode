@@ -9,7 +9,7 @@ local classes = ctf_core.include_files(
 	"spectators.lua"
 )
 
-local TEAM_SIZE = 3 --players each
+local TEAM_SIZE = 1 --players each
 local CONFIRMED_PLAYER_TARGET = TEAM_SIZE * 2
 
 local old_bounty_reward_func = ctf_modebase.bounties.bounty_reward_func
@@ -57,12 +57,24 @@ local TEAM_ID = {false, false}
 
 local TEAM_LEADER = {}
 
+local function no_spectator()
+	local out = {}
+
+	for t, def in pairs(ctf_map.current_map.teams) do
+		if not def.not_playing then
+			table.insert(out, t)
+		end
+	end
+
+	return out
+end
+
 local function teamcolor_to_teamnum(x)
-	return table.indexof(ctf_teams.current_team_list, x)
+	return table.indexof(no_spectator(), x)
 end
 
 local function teamnum_to_teamcolor(x)
-	return ctf_teams.current_team_list[x]
+	return no_spectator()[x]
 end
 
 local function has_team_leader(teamnum)
@@ -107,6 +119,17 @@ showform = function(player)
 		})
 	end
 
+	if not hud:exists(player, "showform_explanation") then
+		hud:add(player, "showform_explanation", {
+			hud_elem_type = "text",
+			position = {x = 0.5, y = 0.5},
+			offset = {x = 0, y = -32},
+			alignment = {x = "center", y = "up"},
+			text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+			color = 0xFF0000,
+		})
+	end
+
 	if minetest.check_player_privs(player, {tournament_spectator = true}) then return end
 
 	local playername = player:get_player_name()
@@ -143,12 +166,14 @@ showform = function(player)
 				"formspec_version[4]",
 				{"label[0 ,0;Team %s]",      TEAM[1] or "1"},
 				{"label[%f,0;Team %s]", w/2, TEAM[2] or "2"},
-				{"textlist[0 ,0.5;%f,7;team1;" .. color_confirmed(team1_players) .. "]",
-					w/2 - px
+				{"textlist[0 ,0.5;%f,7;team1;%s]",
+					w/2 - px,
+					color_confirmed(team1_players)
 				},
-				{"textlist[%f,0.5;%f,7;team2;" .. color_confirmed(team2_players) .. "]",
+				{"textlist[%f,0.5;%f,7;team2;%s]",
 					w/2,
-					w/2 - px
+					w/2 - px,
+					color_confirmed(team2_players)
 				},
 			}
 
@@ -187,13 +212,16 @@ showform = function(player)
 
 				reshow_form(pname)
 
-				local idx = table.indexof(confirmed, playername)
+				local idx = table.indexof(confirmed, pname)
 				if idx ~= -1 then
 					table.remove(confirmed, idx)
-					hud:change(playername, "showform_explanation", {
-						text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
-						color = 0xFF0000,
-					})
+
+					if hud:exists(pname, "showform_explanation") then
+						hud:change(pname, "showform_explanation", {
+							text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+							color = 0xFF0000,
+						})
+					end
 
 					for _, p in pairs(minetest.get_connected_players()) do
 						if hud:exists(p, "confirmed_players") then
@@ -210,13 +238,16 @@ showform = function(player)
 
 				reshow_form(pname)
 
-				local idx = table.indexof(confirmed, playername)
+				local idx = table.indexof(confirmed, pname)
 				if idx ~= -1 then
 					table.remove(confirmed, idx)
-					hud:change(playername, "showform_explanation", {
-						text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
-						color = 0xFF0000,
-					})
+
+					if hud:exists(pname, "showform_explanation") then
+						hud:change(pname, "showform_explanation", {
+							text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+							color = 0xFF0000,
+						})
+					end
 
 					for _, p in pairs(minetest.get_connected_players()) do
 						if hud:exists(p, "confirmed_players") then
@@ -237,10 +268,12 @@ showform = function(player)
 				reshow_form(pname)
 
 				local num = selected_team[pname]
-				hud:change(pname, "showform_explanation", {
-					text = "Use /teamform to see the teams. You've confirmed being in team \"" .. (TEAM[num] or num) .. "\"",
-					color = 0xFFFFFF,
-				})
+				if hud:exists(pname, "showform_explanation") then
+					hud:change(pname, "showform_explanation", {
+						text = "Use /teamform to see the teams. You've confirmed being in team \"" .. (TEAM[num] or num) .. "\"",
+						color = 0xFFFFFF,
+					})
+				end
 
 				for _, p in pairs(minetest.get_connected_players()) do
 					if hud:exists(p, "confirmed_players") then
@@ -266,17 +299,6 @@ showform = function(player)
 			-- team1 = "CHG:1"
 		end,
 	})
-
-	if not hud:exists(player, "showform_explanation") then
-		hud:add(player, "showform_explanation", {
-			hud_elem_type = "text",
-			position = {x = 0.5, y = 0.5},
-			offset = {x = 0, y = -32},
-			alignment = {x = "center", y = "up"},
-			text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
-			color = 0xFF0000,
-		})
-	end
 end
 
 minetest.register_chatcommand("teamform", {
@@ -476,6 +498,29 @@ minetest.register_globalstep(function(dtime)
 		timer = 0
 
 		if TEAM[1] and TEAM[2] and #confirmed >= CONFIRMED_PLAYER_TARGET then
+			-- trim extra players out, prioritize players locked in by Challonge
+			if #confirmed > CONFIRMED_PLAYER_TARGET then
+				local confirmed_only = {{}, {}}
+				local locked_p = {{}, {}}
+
+				for idx, p in ipairs(confirmed) do
+					if not locked_p[p] then
+						table.insert(confirmed_only[selected_team[p]], p)
+					else
+						table.insert(locked_p[selected_team[p]], p)
+					end
+				end
+
+				for _, tm in pairs({1, 2}) do
+					for i = #confirmed_only[tm] + #locked_p[tm], TEAM_SIZE+1, -1 do
+						local p = table.remove(confirmed, table.indexof(confirmed, confirmed_only[tm][1]))
+						table.remove(confirmed_only[tm], 1)
+
+						minetest.kick_player(p, "Kicked due to your team having too many teammates")
+					end
+				end
+			end
+
 			start_new_match()
 		end
 	end
@@ -813,7 +858,7 @@ ctf_modebase.register_mode("tournament", {
 
 		classes.reset_class_cooldowns()
 
-		if http then
+		if http and FOR_MATCH then
 			http.fetch({
 				url = TOURNAMENT_URL .. "/matches/"..FOR_MATCH.."/mark_as_underway.json",
 				timeout = 10,
@@ -836,10 +881,9 @@ ctf_modebase.register_mode("tournament", {
 		local teams = table.copy(map_teams)
 		teams["spectator"] = {}
 
-		local out = ctf_teams.allocate_teams(teams, true, ...)
+		minetest.log(dump(map_teams))
 
-		table.remove(ctf_teams.current_team_list, table.indexof(ctf_teams.current_team_list, "spectator"))
-		table.insert(ctf_teams.current_team_list, "spectator")
+		local out = ctf_teams.allocate_teams(teams, true, ...)
 
 		local players = minetest.get_connected_players()
 		table.shuffle(players)
@@ -868,7 +912,7 @@ ctf_modebase.register_mode("tournament", {
 			features.on_allocplayer(player, new_team)
 
 			if new_team == "spectator" then
-				if not confirmed[player:get_player_name()] then
+				if table.indexof(confirmed, player:get_player_name()) == -1 then
 					if not minetest.check_player_privs(player, {tournament_spectator = true}) then
 						minetest.kick_player(player:get_player_name(), "Only official spectators are allowed when a match is started. "..
 								"You aren't confirmed in a team")
@@ -877,6 +921,7 @@ ctf_modebase.register_mode("tournament", {
 
 				minetest.change_player_privs(player:get_player_name(), {
 					interact = false,
+					shout = false,
 					canafk = true,
 					fly = true, noclip = true, fast = true,
 				})
@@ -930,6 +975,12 @@ ctf_modebase.register_mode("tournament", {
 							minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
 				})
 
+				minetest.log(dump(ctf_teams.team).." [1] = "..teamnum_to_teamcolor(1).." | [2] = "..teamnum_to_teamcolor(2))
+
+				minetest.chat_send_all(minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
+				" vs " ..
+				minetest.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2]))
+
 				if player.set_observers then
 					player:set_observers({[player:get_player_name()] = true})
 				end
@@ -940,6 +991,7 @@ ctf_modebase.register_mode("tournament", {
 
 				minetest.change_player_privs(name, {
 					interact = true,
+					shout = true,
 					canafk = true,
 					fly = false, noclip = false, fast = false,
 				})

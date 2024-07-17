@@ -8,7 +8,7 @@ ctf_teams.team.spectator = {
 table.insert(ctf_teams.teamlist, "spectator")
 
 minetest.register_on_player_hpchange(function(player, hp_change, reason)
-	if ctf_teams.get(player) == "spectator" then
+	if ctf_modebase.match_started and ctf_teams.get(player) == "spectator" then
 		return 0
 	else
 		return hp_change
