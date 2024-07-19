@@ -167,14 +167,12 @@ showform = function(player)
 				"formspec_version[4]",
 				{"label[0 ,0;Team %s]",      TEAM[1] or "1"},
 				{"label[%f,0;Team %s]", w/2, TEAM[2] or "2"},
-				{"textlist[0 ,0.5;%f,7;team1;%s]",
+				{"textlist[0 ,0.5;%f,7;team1;" .. color_confirmed(team1_players) .. "]",
 					w/2 - px,
-					color_confirmed(team1_players)
 				},
-				{"textlist[%f,0.5;%f,7;team2;%s]",
+				{"textlist[%f,0.5;%f,7;team2;" .. color_confirmed(team2_players) .. "]",
 					w/2,
 					w/2 - px,
-					color_confirmed(team2_players)
 				},
 			}
 
