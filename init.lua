@@ -42,6 +42,12 @@ local QUEUE_MATCH_END = false
 local confirmed = {}
 local locked = {}
 
+minetest.register_can_bypass_userlimit(function(name, ip)
+	if not MATCH_STARTED or minetest.check_player_privs(name, {tournament_manager   = true}) or
+	minetest.check_player_privs(name, {tournament_spectator = true}) then
+		return true end
+end)
+
 --[[
 
    _______                     ______
