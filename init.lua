@@ -712,7 +712,7 @@ end
 minetest.register_chatcommand("surrender", {
 	description = "Give the other team the win",
 	func = function(name)
-		local tnum = teamcolor_to_teamnum(ctf_teams.get(name)) or locked[name]
+		local tnum = locked[name]
 
 		if tnum and TEAM_LEADER[tnum] == name then
 			report_win(tnum)
