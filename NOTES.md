@@ -15,6 +15,7 @@ They can then join and start playing, or arrange a time to play if someone can't
   - This includes making sure they know how the tournament works and what to do. If the team leader doesn't know they can ask a tournament manager and relay the info.
   - If they don't show up on time with enough players they will have to `/surrender` or run `/report_dq` for each missing player if they still want to try playing
   - Your team can have members that aren't in the CTF Discord, but you have to be able to reliably coordinate with them to get your team into matches
+- After a round has gone on for 30 minutes flag attempts will instant-capture
 - You can only claim tournament rewards for the username you play as (listed by your team leader), and only if it's your account on the main server
 - There will be *__0 tolerance__* for accidental or intentional messing around/interference with the tournament.
   - Don't join tournament servers unless you have a match there. The only specators allowed are officially appointed ones.
@@ -25,6 +26,3 @@ They can then join and start playing, or arrange a time to play if someone can't
   - No swearing/being rude. Keep the chat sportsmanlike and PG
   - Use common sense, and ask your team leader/a tournament manager where unsure
 - CTF is not balanced for tournaments at all, the first few tournaments may be extremely unfair, and things will probably be run really badly. Bear with it, and try to have fun anyway.
-
-
-- TODO: time limit on joining/playing
