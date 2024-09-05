@@ -25,4 +25,4 @@ They can then join and start playing, or arrange a time to play if someone can't
     - It's ok to change Minetest settings or use glitches like third person clipping.
   - No swearing/being rude. Keep the chat sportsmanlike and PG
   - Use common sense, and ask your team leader/a tournament manager where unsure
-- CTF is not balanced for tournaments at all, the first few tournaments may be extremely unfair, and things will probably be run really badly. Bear with it, and try to have fun anyway.
+- CTF is not balanced for tournaments at all, the first few tournaments may be extremely unfair, and things will probably be run really badly. Bear with it, and try to have fun anyway. Things will improve over time.
