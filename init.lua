@@ -772,7 +772,7 @@ ctf_modebase.register_mode("tournament", {
 		"ctf_ranged:ammo", "default:axe_mese", "default:axe_diamond", "default:shovel_mese", "default:shovel_diamond",
 		"ctf_map:damage_cobble", "ctf_map:spike", "ctf_map:reinforced_cobble 2",
 	},
-	physics = {sneak_glitch = true, new_move = false},
+	physics = {sneak_glitch = true, new_move = true},
 	blacklisted_nodes = {"default:apple"},
 	team_chest_items = {
 		"default:cobble 99", "default:wood 99", "ctf_map:damage_cobble 24", "ctf_map:reinforced_cobble 24",
