@@ -43,7 +43,7 @@ minetest.register_globalstep(function(dtime)
 				]]
 				p:override_day_night_ratio(math.max(0.4, math.min(1, (time*6) - 0.55)))
 
-				minetest.log(p:get_day_night_ratio())
+				-- minetest.log(p:get_day_night_ratio())
 			end
 		end
 

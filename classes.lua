@@ -204,7 +204,7 @@ ctf_ranged.simple_register_gun("tournament_mode:ranged_rifle", {
 		end
 
 		if itemstack:get_wear() == 0 then
-			grenades.throw_grenade("grenades:frag", 24, user)
+			grenades.throw_grenade("ctf_grenades:frag", 24, user)
 
 			local step = math.floor(65534 / RANGED_COOLDOWN_TIME)
 			ctf_modebase.update_wear.start_update(user:get_player_name(), "tournament_mode:ranged_rifle_loaded", step, true)
