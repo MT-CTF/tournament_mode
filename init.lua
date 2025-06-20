@@ -136,17 +136,26 @@ showform = function(player)
 	end
 
 	if not hud:exists(player, "showform_explanation") then
-		hud:add(player, "showform_explanation", {
-			hud_elem_type = "text",
-			position = {x = 0.5, y = 0.5},
-			offset = {x = 0, y = -32},
-			alignment = {x = "center", y = "up"},
-			text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
-			color = 0xFF0000,
-		})
+		if not minetest.check_player_privs(player, {tournament_spectator = true}) then
+			hud:add(player, "showform_explanation", {
+				hud_elem_type = "text",
+				position = {x = 0.5, y = 0.5},
+				offset = {x = 0, y = -32},
+				alignment = {x = "center", y = "up"},
+				text = "Use /teamform to join a team. You haven't confirmed what team you're in.",
+				color = 0xFF0000,
+			})
+		else
+			hud:add(player, "showform_explanation", {
+				hud_elem_type = "text",
+				position = {x = 0.5, y = 0.5},
+				offset = {x = 0, y = -32},
+				alignment = {x = "center", y = "up"},
+				text = "Use /teamform to view the teams.",
+				color = 0xFFFFFF,
+			})
+		end
 	end
-
-	if minetest.check_player_privs(player, {tournament_spectator = true}) then return end
 
 	local playername = player:get_player_name()
 
@@ -191,7 +200,7 @@ showform = function(player)
 				},
 			}
 
-			if not locked[playername] then
+			if not locked[playername] and not minetest.check_player_privs(player, {tournament_spectator = true}) then
 				table.insert(out, {"button[0, %f;2.4,1;select_team1;Select Team]", 7.5 + py})
 				table.insert(out, {"button[%f,%f;2.4,1;select_team2;Select Team]", w/2, 7.5 + py})
 			end
