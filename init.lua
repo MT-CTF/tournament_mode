@@ -197,7 +197,7 @@ showform = function(player)
 			end
 
 			if show_confirm then
-				if has_team_leader(selected_team[playername]) then
+				if not locked[playername] then
 					table.insert(out, "style[confirm_disabled;font=bold;textcolor=grey]")
 					table.insert(out, {
 						"button[%f,%f;6,1;confirm_disabled;Confirm Team (Username not registered)]",
