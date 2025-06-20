@@ -1096,7 +1096,7 @@ minetest.register_globalstep(function(dtime)
 			minetest.after(25 * 60, function()
 				minetest.chat_send_all("\n" ..
 					minetest.colorize("green", "[ANNOUNCEMENT]") ..
-					" In 5 minutes the match will end, and the team with the most attempts will win\n\n"
+					" In 5 minutes flag attempts will instantly capture!\n\n"
 				)
 
 				minetest.after(5 * 60, function()
@@ -1109,7 +1109,7 @@ minetest.register_globalstep(function(dtime)
 						QUEUE_MATCH_END = true
 						minetest.chat_send_all("\n" ..
 							minetest.colorize("green", "[ANNOUNCEMENT]") ..
-							" The next team to grab a flag will win\n\n"
+							" The next team to grab a flag will win!\n\n"
 						)
 					elseif attempts_1 > attempts_2 then
 						local best, best_count = false, -1
@@ -1150,6 +1150,7 @@ minetest.register_globalstep(function(dtime)
 			end)
 
 			start_new_match()
+			timer = -6000 -- Will start match multiple times otherwise
 		end
 	end
 end)
