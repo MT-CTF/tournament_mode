@@ -198,6 +198,12 @@ showform = function(player)
 
 			if show_confirm then
 				if has_team_leader(selected_team[playername]) then
+					table.insert(out, "style[confirm_disabled;font=bold;textcolor=grey]")
+					table.insert(out, {
+						"button[%f,%f;6,1;confirm_disabled;Confirm Team (Username not registered)]",
+						(w/2) - (6/2), 9 + py
+					})
+				elseif has_team_leader(selected_team[playername]) then
 					table.insert(out, "style[confirm;font=bold]")
 					table.insert(out, {
 						"button_exit[%f,%f;3,1;confirm;%s]",
@@ -271,9 +277,8 @@ showform = function(player)
 						end
 					end
 				end
-
 				return "refresh"
-			elseif fields.confirm and table.indexof(confirmed, pname) == -1 and
+			elseif fields.confirm and table.indexof(confirmed, pname) == -1 and locked[pname] and
 					has_team_leader(selected_team[pname]) then
 				table.insert(confirmed, pname)
 
@@ -350,6 +355,8 @@ end)
 
 ]]
 
+local HOLDERROR = ""
+
 local tracked_players = {}
 local allow_rejoin = {}
 
@@ -398,8 +405,6 @@ local promohud = mhud.init()
 minetest.register_on_joinplayer(function(player)
 	if minetest.check_player_privs(player, {tournament_spectator = true}) then
 		local promo = player:get_meta():get_string("spectator_promo")
-
-		if promo == "" then promo = "Set this text with /promo" end
 
 		promohud:add(player, "spectator_promo", {
 			hud_elem_type = "text",
@@ -469,10 +474,16 @@ minetest.register_on_joinplayer(function(player)
 		allow_rejoin[pname] = nil
 	end
 
-	if minetest.check_player_privs(player, {tournament_manager   = true}) or
-	   minetest.check_player_privs(player, {tournament_spectator = true})
-	then
-		minetest.chat_send_player(pname, "Not checking your team, as you're a manager/spectator")
+	if minetest.check_player_privs(player, {tournament_manager   = true}) then
+		minetest.chat_send_player(pname, "Not checking your team, as you're a manager")
+
+		if HOLDERROR ~= "" then
+			minetest.chat_send_player(pname, minetest.colorize("red", "[ERRORS FOUND]: "..HOLDERROR))
+		else
+			minetest.chat_send_player(pname, "No tournament errors detected.")
+		end
+	elseif minetest.check_player_privs(player, {tournament_spectator = true}) then
+		minetest.chat_send_player(pname, "Not checking your team, as you're a spectator")
 	else
 		table.insert(tracked_players, player:get_player_name())
 		on_new_tracked(player:get_player_name())
@@ -484,6 +495,9 @@ minetest.register_on_joinplayer(function(player)
 		if player then
 			showform(player)
 		end
+
+		minetest.chat_send_player(pname, "You can run " .. minetest.colorize("cyan", "/tournament_teams") ..
+				" to see a list of teams in this tournament, and their players")
 	end
 end)
 
@@ -537,7 +551,12 @@ if API_KEY and TOURNAMENT_ID then
 	}, function(checktournament)
 		assert(checktournament.succeeded)
 
-		-- minetest.log(dump(checktournament))
+		HOLDERROR = ""
+		if checktournament.code ~= 200 then
+			HOLDERROR = "Initial: "..dump(checktournament)
+		end
+
+		--minetest.log(dump(checktournament))
 
 		checktournament = minetest.parse_json(checktournament.data, {})
 
