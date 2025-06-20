@@ -541,6 +541,8 @@ local http, TOURNAMENT_URL
 
 local FOR_MATCH
 
+local FIRST_LEADER = false
+
 local API_KEY = minetest.settings:get("tournament_mode_api_key")
 local TOURNAMENT_ID = minetest.settings:get("tournament_mode_tournament_id")
 local STATION_ID = minetest.settings:get("tournament_mode_station_id") or 1
@@ -698,6 +700,10 @@ if API_KEY and TOURNAMENT_ID then
 											if leader == pname then
 												TEAM_LEADER[team] = pname
 												minetest.chat_send_all("Found team leader for team "..team.." ("..TEAM[team].."): "..pname)
+
+												if not FIRST_LEADER then
+													FIRST_LEADER = os.clock()
+												end
 											else
 												minetest.chat_send_all("Found team member for team "..team.." ("..TEAM[team].."): "..pname)
 											end
@@ -1157,6 +1163,15 @@ minetest.register_globalstep(function(dtime)
 					end
 				end)
 			end)
+
+			local time = os.clock() - (FIRST_LEADER or os.clock())
+			local hours = math.floor(math.fmod(time, 86400)/3600)
+			local minutes = math.floor(math.fmod(time,3600)/60)
+			local seconds = math.floor(math.fmod(time,60))
+
+			minetest.chat_send_all(minetest.colorize("cyan",
+				"Match starting after "..string.format("%01dh %02dmin %02ds",hours,minutes,seconds))
+			)
 
 			start_new_match()
 			timer = -6000 -- Will start match multiple times otherwise
