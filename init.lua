@@ -596,11 +596,11 @@ if API_KEY and TOURNAMENT_ID then
 						leader = #players+1
 					end
 
-					table.insert(players, v)
+					table.insert(players, v:trim())
 				end
 			end
 
-			leader = table.remove(players, leader)
+			leader = table.remove(players, leader):trim()
 
 			return leader, players
 		end
@@ -639,7 +639,7 @@ if API_KEY and TOURNAMENT_ID then
 						local leader, players = parse_team_members(entry)
 
 						out = out .. string.format(
-							"    Team %s (Leader: %s)\n        Members: %s\n",
+							"    Team %s (Leader: %s)\n        Members: %s.\n",
 							core.colorize("cyan", entry.participant.display_name),
 							leader,
 							table.concat(players, ", ")
@@ -704,12 +704,6 @@ if API_KEY and TOURNAMENT_ID then
 									player_res = core.parse_json(player_res.data, {})
 
 									local leader, players = parse_team_members(player_res)
-
-									leader = string.trim(leader)
-
-									for k, name in pairs(players) do
-										players[k] = string.trim(players[k])
-									end
 
 									if (not FOR_MATCH or FOR_MATCH == entry.match.id) then
 										if leader == pname or table.indexof(players, pname) ~= -1 then
