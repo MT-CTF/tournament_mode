@@ -60,11 +60,6 @@ local QUEUE_MATCH_END = false
 local confirmed = {}
 local locked = {}
 
-core.register_can_bypass_userlimit(function(name, ip)
-	if not MATCH_STARTED or core.check_player_privs(name, {tournament_manager   = true}) or
-	core.check_player_privs(name, {tournament_spectator = true}) then
-		return true end
-end)
 
 --[[
 
@@ -488,7 +483,7 @@ core.register_on_prejoinplayer(function(name)
 end)
 
 core.register_can_bypass_userlimit(function(name, ip)
-	if core.check_player_privs(name, {tournament_manager   = true}) or locked[name] then
+	if not MATCH_STARTED or core.check_player_privs(name, {tournament_manager   = true}) or locked[name] then
 		return true
 	end
 end)
