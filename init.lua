@@ -2,6 +2,11 @@ local API_KEY = core.settings:get("tournament_mode_api_key")
 local TOURNAMENT_ID = core.settings:get("tournament_mode_tournament_id")
 local STATION_ID = tonumber(core.settings:get("tournament_mode_station_id")) or 1
 
+minetest.after(0, function()
+	ctf_modebase.map_on_next_match = "two_hills"
+	ctf_modebase.mode_on_next_match = "tournament"
+end)
+
 local RANKLIST = {
 	_sort = "score",
 	"score",
@@ -890,6 +895,9 @@ ctf_modebase.register_mode("tournament", {
 		MATCH_STARTED = true
 	end,
 	on_match_end = function(...)
+		ctf_modebase.map_on_next_match = "two_hills"
+		ctf_modebase.mode_on_next_match = "tournament"
+
 		features.on_match_end(...)
 	end,
 	allocate_teams = function(map_teams, dont_allocate_players, ...)
