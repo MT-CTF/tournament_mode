@@ -1128,7 +1128,7 @@ core.register_globalstep(function(dtime)
 				end
 			end
 
-			core.after(25 * 60, function()
+			core.after(15 * 60, function()
 				core.chat_send_all("\n" ..
 					core.colorize("green", "[ANNOUNCEMENT]") ..
 					" In 5 minutes flag attempts will instantly capture!\n\n"
