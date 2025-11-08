@@ -705,6 +705,12 @@ if API_KEY and TOURNAMENT_ID then
 
 									local leader, players = parse_team_members(player_res)
 
+									leader = string.trim(leader)
+
+									for k, name in pairs(players) do
+										players[k] = string.trim(players[k])
+									end
+
 									if (not FOR_MATCH or FOR_MATCH == entry.match.id) then
 										if leader == pname or table.indexof(players, pname) ~= -1 then
 											TEAM[team] = player_res.participant.display_name
