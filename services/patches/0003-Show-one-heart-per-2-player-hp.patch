@@ -1,0 +1,45 @@
+From 73a67ce5e09e07c8c1a51f92fdcd29ebf951bb25 Mon Sep 17 00:00:00 2001
+From: LoneWolfHT <lonewolf04361@gmail.com>
+Date: Mon, 12 Aug 2024 15:00:30 -0700
+Subject: [PATCH 3/4] Show one heart per 2 player hp
+
+---
+ builtin/game/hud.lua | 19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/builtin/game/hud.lua b/builtin/game/hud.lua
+index eaf037e68..445127333 100644
+--- a/builtin/game/hud.lua
++++ b/builtin/game/hud.lua
+@@ -141,16 +141,21 @@ core.register_playerevent(player_event_handler)
+ local enable_damage = core.settings:get_bool("enable_damage")
+ 
+ local function scale_to_hud_max(player, field)
+-	-- Scale "hp" or "breath" to the hud maximum dimensions
+ 	local current = player["get_" .. field](player)
+-	local nominal
+-	if field == "hp" then -- HUD is called health but field is hp
+-		nominal = registered_elements.health.elem_def.item
++
++	if field == "hp" then
++		return current
+ 	else
+-		nominal = registered_elements[field].elem_def.item
++		-- Scale "hp" or "breath" to the hud maximum dimensions
++		local nominal
++		if field == "hp" then -- HUD is called health but field is hp
++			nominal = registered_elements.health.elem_def.item
++		else
++			nominal = registered_elements[field].elem_def.item
++		end
++		local max_display = math.max(player:get_properties()[field .. "_max"], current)
++		return math.ceil(current / max_display * nominal)
+ 	end
+-	local max_display = math.max(player:get_properties()[field .. "_max"], current)
+-	return math.ceil(current / max_display * nominal)
+ end
+ 
+ register_builtin_hud_element("health", {
+-- 
+2.45.2.windows.1
+

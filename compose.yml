@@ -1,0 +1,18 @@
+services:
+  setup-tluanti-volume:
+    image: alpine:latest
+    volumes:
+      - ${HOST_CTF_PATH}:/home/luanti/tournament_server
+    command: ["chown", "-R", "1000:1000", "/home/luanti/tournament_server"]
+    tty: true
+  tluanti:
+    user: "1000:1000"
+    image: tcapturetheflag
+    restart: unless-stopped
+    build:
+      context: ./services/
+      target: final
+    volumes:
+      - ${HOST_CTF_PATH}:/home/luanti/tournament_server
+    ports:
+      - "30007:30007/UDP"

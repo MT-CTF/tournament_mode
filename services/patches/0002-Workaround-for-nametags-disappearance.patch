@@ -1,0 +1,25 @@
+From fdbfe560e364cc8000c2402b22f51b372a761baa Mon Sep 17 00:00:00 2001
+From: savilli <78875209+savilli@users.noreply.github.com>
+Date: Sun, 13 Feb 2022 19:30:35 +0100
+Subject: [PATCH 2/4] Workaround for nametags disappearance
+
+---
+ src/serverenvironment.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/serverenvironment.cpp b/src/serverenvironment.cpp
+index 9a9c50fc9..cef1dbd4a 100644
+--- a/src/serverenvironment.cpp
++++ b/src/serverenvironment.cpp
+@@ -1689,7 +1689,7 @@ void ServerEnvironment::deactivateFarObjects(const bool _force_delete)
+ 		// If block is still active, don't remove
+ 		bool still_active = obj->isStaticAllowed() ?
+ 			m_active_blocks.contains(blockpos_o) :
+-			getMap().getBlockNoCreateNoEx(blockpos_o) != nullptr;
++			true;
+ 		if (!force_delete && still_active)
+ 			return false;
+ 
+-- 
+2.45.2.windows.1
+
