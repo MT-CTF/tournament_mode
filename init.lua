@@ -240,20 +240,18 @@ core.register_on_joinplayer(function(player)
 		core.chat_send_player(pname, "Spectator access approved")
 	end
 
-	do
-		local promo = player:get_meta():get_string("spectator_promo")
+	local promo = player:get_meta():get_string("spectator_promo")
 
-		if promo ~= "" then
-			promohud:add(player, "spectator_promo", {
-				hud_elem_type = "text",
-				position = {x = 1, y = 1},
-				alignment = {x = "left", y = "up"},
-				offset = {x = -24, y = -12},
-				color = 0xFFFFFF,
-				text_scale = 2,
-				text = promo
-			})
-		end
+	if promo ~= "" then
+		promohud:add(player, "spectator_promo", {
+			hud_elem_type = "text",
+			position = {x = 1, y = 1},
+			alignment = {x = "left", y = "up"},
+			offset = {x = -24, y = -12},
+			color = 0xFFFFFF,
+			text_scale = 2,
+			text = promo
+		})
 	end
 end)
 
@@ -263,29 +261,28 @@ core.register_chatcommand("promo", {
 	func = function(name, params)
 		local player = core.get_player_by_name(name)
 
-		if player then
-			player:get_meta():set_string("spectator_promo", params:sub(1, 20))
-
-			if promohud:exists(player, "spectator_promo") then
-				promohud:change(player, "spectator_promo", {
-					text = params:sub(1, 20)
-				})
-			else
-				promohud:add(player, "spectator_promo", {
-					hud_elem_type = "text",
-					position = {x = 1, y = 1},
-					alignment = {x = "left", y = "up"},
-					offset = {x = -24, y = -12},
-					color = 0xFFFFFF,
-					text_scale = 1,
-					text = params:sub(1, 20)
-				})
-			end
-
-			return true, "Promo set"
-		else
+		if not player then
 			return false, "You must be online to run this command!"
 		end
+
+		local text = params:sub(1, 20)
+		player:get_meta():set_string("spectator_promo", text)
+
+		if promohud:exists(player, "spectator_promo") then
+			promohud:change(player, "spectator_promo", {text = text})
+		else
+			promohud:add(player, "spectator_promo", {
+				hud_elem_type = "text",
+				position = {x = 1, y = 1},
+				alignment = {x = "left", y = "up"},
+				offset = {x = -24, y = -12},
+				color = 0xFFFFFF,
+				text_scale = 1,
+				text = text
+			})
+		end
+
+		return true, "Promo set"
 	end
 })
 
@@ -295,20 +292,21 @@ core.register_on_prejoinplayer(function(name)
 	-- everyone else waits for the next teamform. Also stays closed in
 	-- the post-win restart window (MATCH_STARTED is already false there)
 	-- and while the next match is loading.
-	if MATCH_STARTED or MATCH_OVER or STARTING then
-		-- rejoin passes are scoped to the match the player left: a stale
-		-- pass must not admit them into a later match under a roster
-		-- that no longer exists
-		if core.check_player_privs(name, {tournament_manager = true}) or
-		   spectator_approved[name] or
-		   locked[name] or
-		   allow_rejoin[name] == MATCH_ID
-		then
-			return
-		end
-
-		return "Match in progress. Please wait until your team is up"
+	if not (MATCH_STARTED or MATCH_OVER or STARTING) then
+		return
 	end
+
+	-- rejoin passes are scoped to the match the player left: a stale
+	-- pass must not admit them into a later match under a roster
+	-- that no longer exists
+	if core.check_player_privs(name, {tournament_manager = true}) or
+		spectator_approved[name] or
+		locked[name] or
+		allow_rejoin[name] == MATCH_ID then
+		return
+	end
+
+	return "Match in progress. Please wait until it's done"
 end)
 
 core.register_can_bypass_userlimit(function(name, ip)
@@ -328,7 +326,11 @@ end)
 core.register_on_leaveplayer(function(player)
 	local name = player:get_player_name()
 
-	if MATCH_STARTED then
+	-- rejoin passes are only for players who may come back mid-match.
+	-- unapproved spectators kicked at match start must stay out: the
+	-- modstorage mirror is used because player meta can't be read once
+	-- they're offline
+	if MATCH_STARTED and (locked[name] or spectator_approved[name] or is_manager(name)) then
 		allow_rejoin[name] = MATCH_ID
 	end
 end)
@@ -347,14 +349,10 @@ end)
 ]]
 
 local function report_win(teamnum, match_id)
-	if match_id ~= MATCH_ID or not MATCH_STARTED then
-		return
-	end
-
 	-- teamnum derives from allocator lookups that return nil for
 	-- unknown colors; TEAM[nil] would error below (and in the delayed
 	-- core.after callers, 5s later)
-	if teamnum ~= 1 and teamnum ~= 2 then
+	if match_id ~= MATCH_ID or not MATCH_STARTED or (teamnum ~= 1 and teamnum ~= 2) then
 		return
 	end
 
@@ -387,6 +385,25 @@ local function count_readied(teamnum)
 	return n
 end
 
+local function best_online_attempt(players, teamcolor)
+	local best, best_count = false, -1
+
+	for player, scores in pairs(players) do
+		scores.flag_attempts = scores.flag_attempts or 0
+
+		-- team totals already include leavers' attempts; but the
+		-- simulated capture needs a live player object (PlayerObj of
+		-- an offline name is nil and would crash on_flag_capture),
+		-- so the credit goes to the best attempter still online
+		if core.get_player_by_name(player) and scores._team == teamcolor and
+				scores.flag_attempts > best_count then
+			best, best_count = player, scores.flag_attempts
+		end
+	end
+
+	return best
+end
+
 local function schedule_sudden_death(match_id)
 	core.after(15 * 60, function()
 		if match_id ~= MATCH_ID or not MATCH_STARTED then
@@ -405,8 +422,9 @@ local function schedule_sudden_death(match_id)
 
 			local players = recent_rankings.players()
 			local teams = recent_rankings.teams()
-			local attempts_1 = (teams[teamnum_to_teamcolor(1)] or {}).flag_attempts or 0
-			local attempts_2 = (teams[teamnum_to_teamcolor(2)] or {}).flag_attempts or 0
+			local color1, color2 = teamnum_to_teamcolor(1), teamnum_to_teamcolor(2)
+			local attempts_1 = (teams[color1] or {}).flag_attempts or 0
+			local attempts_2 = (teams[color2] or {}).flag_attempts or 0
 
 			if attempts_1 == attempts_2 then
 				QUEUE_MATCH_END = true
@@ -415,44 +433,18 @@ local function schedule_sudden_death(match_id)
 					" The next team to grab a flag will win!\n\n"
 				)
 			elseif attempts_1 > attempts_2 then
-				local best, best_count = false, -1
-
-				for player, scores in pairs(players) do
-					scores.flag_attempts = scores.flag_attempts or 0
-
-					-- rankings keep scorers who already left: only an
-					-- online player can take the winning attempt
-					if core.get_player_by_name(player) and
-							scores._team == teamnum_to_teamcolor(1) and
-							scores.flag_attempts > best_count then
-						best = player
-						best_count = scores.flag_attempts
-					end
-				end
+				local best = best_online_attempt(players, color1)
 
 				if best then
-					features.on_flag_capture(PlayerObj(best), {teamnum_to_teamcolor(2)})
+					features.on_flag_capture(PlayerObj(best), {color2})
 				end
 
 				report_win(1, match_id)
 			else
-				local best, best_count = false, -1
-
-				for player, scores in pairs(players) do
-					scores.flag_attempts = scores.flag_attempts or 0
-
-					-- rankings keep scorers who already left: only an
-					-- online player can take the winning attempt
-					if core.get_player_by_name(player) and
-							scores._team == teamnum_to_teamcolor(2) and
-							scores.flag_attempts > best_count then
-						best = player
-						best_count = scores.flag_attempts
-					end
-				end
+				local best = best_online_attempt(players, color2)
 
 				if best then
-					features.on_flag_capture(PlayerObj(best), {teamnum_to_teamcolor(1)})
+					features.on_flag_capture(PlayerObj(best), {color1})
 				end
 
 				report_win(2, match_id)
@@ -529,9 +521,7 @@ core.register_chatcommand("surrender", {
 			end
 		end
 
-		if not loser then
-			loser = tonumber(arg:match("^([12])$"))
-		end
+		loser = loser or tonumber(arg:match("^([12])$"))
 
 		if not loser then
 			return false, "Usage: /surrender <team name> (the losing team)"
@@ -659,7 +649,17 @@ ctf_modebase.register_mode("tournament", {
 		local players = core.get_connected_players()
 		table.shuffle(players)
 		for _, player in ipairs(players) do
-			ctf_teams.allocate_player(player)
+			local pname = player:get_player_name()
+
+			-- unapproved spectators are kicked at match start
+			-- instead of watching it
+			if not locked[pname] and not is_manager(pname) and
+					not is_spectate_allowed(pname) then
+				core.kick_player(pname, "Spectator access was not approved - " ..
+					"ask a tournament manager, then rejoin for the next match")
+			else
+				ctf_teams.allocate_player(player)
+			end
 		end
 
 		return out
@@ -671,11 +671,8 @@ ctf_modebase.register_mode("tournament", {
 			return teamnum_to_teamcolor(locked[pname])
 		end
 
-		if is_manager(pname) or is_spectate_allowed(pname) then
-			return "spectator"
-		end
-
-		-- unassigned players watch as spectators; nobody is kicked
+		-- non-rostered players allocate as spectators; the
+		-- allocate_teams loop above kicks the unapproved ones
 		return "spectator"
 	end,
 	on_allocplayer = function(player, new_team)
@@ -684,9 +681,10 @@ ctf_modebase.register_mode("tournament", {
 			features.on_allocplayer(player, new_team)
 
 		if new_team == "spectator" then
-			-- anyone present at match start who isn't rostered watches as
-			-- a spectator: no kicks, so everyone can rejoin the next
-			-- lobby freely no matter how the teams change
+			-- managers and approved spectators watch the match.
+			-- unapproved spectators pass through here during the
+			-- match-start allocation but are kicked right after by
+			-- the allocate_teams loop above
 			local pname = player:get_player_name()
 
 			-- snapshot everything below before mutating it. Kept across
@@ -768,12 +766,10 @@ ctf_modebase.register_mode("tournament", {
 
 			for id, def in pairs(player:hud_get_all()) do
 				if def.type == "statbar" then
-					if not spectator_statbars[pname][id] then
-						spectator_statbars[pname][id] = {
-							x = def.position.x,
-							y = def.position.y,
-						}
-					end
+					spectator_statbars[pname][id] = spectator_statbars[pname][id] or {
+						x = def.position.x,
+						y = def.position.y,
+					}
 
 					player:hud_change(id, "position", {x = -10, y = -10})
 				end
@@ -865,6 +861,14 @@ ctf_modebase.register_mode("tournament", {
 	can_take_flag = features.can_take_flag,
 	on_flag_take = function(player, teamname, ...)
 		local out = features.on_flag_take(player, teamname, ...)
+		local color1, color2 = teamnum_to_teamcolor(1), teamnum_to_teamcolor(2)
+		local team_attempts = recent_rankings.teams()
+		local text = core.colorize(ctf_teams.team[color1].color, TEAM[1]) ..
+			string.format(" (%d) vs (%d) ",
+				(team_attempts[color1] or {}).flag_attempts or 0,
+				(team_attempts[color2] or {}).flag_attempts or 0
+			) ..
+			core.colorize(ctf_teams.team[color2].color, TEAM[2])
 
 		for _, p in pairs(core.get_connected_players()) do
 			if ctf_teams.get(p) ~= "spectator" then
@@ -875,22 +879,10 @@ ctf_modebase.register_mode("tournament", {
 						offset = {x = 0, y = -112},
 						alignment = {x = "center", y = "up"},
 						color = 0xFFFFFF,
-						text = core.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
-							string.format(" (%d) vs (%d) ",
-								(recent_rankings.teams()[teamnum_to_teamcolor(1)] or {}).flag_attempts or 0,
-								(recent_rankings.teams()[teamnum_to_teamcolor(2)] or {}).flag_attempts or 0
-							) ..
-							core.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
+						text = text
 					})
 				else
-					hud:change(p, "attempt_info", {
-						text = core.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
-							string.format(" (%d) vs (%d) ",
-								(recent_rankings.teams()[teamnum_to_teamcolor(1)] or {}).flag_attempts or 0,
-								(recent_rankings.teams()[teamnum_to_teamcolor(2)] or {}).flag_attempts or 0
-							) ..
-							core.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
-					})
+					hud:change(p, "attempt_info", {text = text})
 				end
 			end
 		end
@@ -941,8 +933,9 @@ ctf_modebase.register_mode("tournament", {
 
 local timer = 0
 core.register_globalstep(function(dtime)
-	if MATCH_STARTED or STARTING or MATCH_OVER then return end
-	if not teamform.teams_locked() then return end
+	if MATCH_STARTED or STARTING or MATCH_OVER or not teamform.teams_locked() then
+		return
+	end
 
 	timer = timer + dtime
 

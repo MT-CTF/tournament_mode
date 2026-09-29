@@ -85,37 +85,40 @@ minetest.register_tool("tournament_mode:support_paxel", {
 	sound = {breaks = "default_tool_breaks"},
 
 	on_place = function(itemstack, user, pointed_thing)
-		if pointed_thing and itemstack:get_wear() == 0 then
-			local pos = pointed_thing.under
-			if is_diggable(minetest.get_node(pos)) then
-				if not ctf_modebase.match_started then
-					hud_events.new(user, {
-						quick = true,
-						text = "Can't use during build time",
-						color = "warning",
-					})
-					return
-				end
-
-				local pname = user:get_player_name()
-
-				minetest.dig_node(pos)
-
-				if dig_timers[pname] then
-					dig_timers[pname]:cancel()
-				end
-
-				dig_timers[pname] = minetest.after(DIG_SPEED, dig, pname, pos, PAXEL_POWER, PAXEL_RETRY)
-
-				local dstep = math.floor(65534 / PAXEL_COOLDOWN_TIME)
-				ctf_modebase.update_wear.start_update(pname, "tournament_mode:support_paxel", dstep, true)
-
-				itemstack:set_wear(65534)
-				return itemstack
-			else
-				minetest.item_place(itemstack, user, pointed_thing)
-			end
+		if not pointed_thing or itemstack:get_wear() ~= 0 then
+			return
 		end
+
+		local pos = pointed_thing.under
+
+		if not is_diggable(minetest.get_node(pos)) then
+			minetest.item_place(itemstack, user, pointed_thing)
+			return
+		end
+
+		if not ctf_modebase.match_started then
+			hud_events.new(user, {
+				quick = true,
+				text = "Can't use during build time",
+				color = "warning",
+			})
+			return
+		end
+
+		local pname = user:get_player_name()
+		minetest.dig_node(pos)
+
+		if dig_timers[pname] then
+			dig_timers[pname]:cancel()
+		end
+
+		dig_timers[pname] = minetest.after(DIG_SPEED, dig, pname, pos, PAXEL_POWER, PAXEL_RETRY)
+
+		local dstep = math.floor(65534 / PAXEL_COOLDOWN_TIME)
+		ctf_modebase.update_wear.start_update(pname, "tournament_mode:support_paxel", dstep, true)
+
+		itemstack:set_wear(65534)
+		return itemstack
 	end,
 })
 

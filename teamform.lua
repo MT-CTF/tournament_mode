@@ -94,27 +94,15 @@ end
 
 load_carryover()
 
-local function get_online_team_players(teamnum)
+-- display list: offline players stay rostered (a rejoin restores their
+-- team) and show greyed until they're back online. The whole roster
+-- sorts together, online and offline intermixed.
+local function get_team_players(teamnum)
 	local out = {}
 
 	for pname, tnum in pairs(locked) do
-		if tnum == teamnum and core.get_player_by_name(pname) then
-			table.insert(out, pname)
-		end
-	end
-
-	table.sort(out)
-	return out
-end
-
--- display list: offline players stay rostered (a rejoin restores their
--- team) and show greyed until they're back online
-local function get_team_players(teamnum)
-	local out = get_online_team_players(teamnum)
-
-	for pname, tnum in pairs(locked) do
-		if tnum == teamnum and not core.get_player_by_name(pname) then
-			table.insert(out, pname)
+		if tnum == teamnum then
+			out[#out + 1] = pname
 		end
 	end
 
@@ -281,11 +269,7 @@ local function team_display_color(colorname)
 		return nil
 	end
 
-	if colorname == "blue" then
-		return "#5A8CFF"
-	end
-
-	return team.color
+	return colorname == "blue" and "#5A8CFF" or team.color
 end
 
 local function colored_label(name, colorname)
@@ -355,25 +339,21 @@ showform = function(player)
 	end
 
 	if not hud:exists(player, "showform_explanation") then
+		local text, color = "Use /teamform to view the teams.", 0xFFFFFF
+
 		if not is_spectate_allowed(player:get_player_name()) then
-			hud:add(player, "showform_explanation", {
-				hud_elem_type = "text",
-				position = {x = 0.5, y = 0.5},
-				offset = {x = 0, y = -32},
-				alignment = {x = "center", y = "up"},
-				text = "Use /teamform to see the teams. Wait for an admin to assign you, then ready up.",
-				color = 0xFF0000,
-			})
-		else
-			hud:add(player, "showform_explanation", {
-				hud_elem_type = "text",
-				position = {x = 0.5, y = 0.5},
-				offset = {x = 0, y = -32},
-				alignment = {x = "center", y = "up"},
-				text = "Use /teamform to view the teams.",
-				color = 0xFFFFFF,
-			})
+			text = "Use /teamform to see the teams. Wait for an admin to assign you, then ready up."
+			color = 0xFF0000
 		end
+
+		hud:add(player, "showform_explanation", {
+			hud_elem_type = "text",
+			position = {x = 0.5, y = 0.5},
+			offset = {x = 0, y = -32},
+			alignment = {x = "center", y = "up"},
+			text = text,
+			color = color,
+		})
 	end
 
 	local playername = player:get_player_name()
@@ -392,12 +372,17 @@ showform = function(player)
 			-- the exemption only applies to unassigned non-managers
 			local spectator_exempt = spectator_approved and not manager and
 				not locked[playername]
-			local show_ready = locked[playername] and table.indexof(readied, playername) == -1 and
-				not spectator_exempt and not starting
-			local show_unready = locked[playername] and table.indexof(readied, playername) ~= -1 and
-				not spectator_exempt and not starting
+			local rostered_active = locked[playername] and not spectator_exempt and not starting
+			local readied_idx = table.indexof(readied, playername)
+			local show_ready = rostered_active and readied_idx == -1
+			local show_unready = rostered_active and readied_idx ~= -1
 			local waiting = not locked[playername] and not spectator_approved and not manager
 			local show_bottom = show_ready or show_unready or waiting or manager or starting
+			-- locked teams block every roster/map mutation: tooltips must
+			-- describe the block, not the unlocked action
+			local function tip(normal)
+				return teams_locked and "Teams are locked - unlock them to make changes" or normal
+			end
 			local w = 15
 			local h = (view_manager and 10.5 or 8.7) + (show_bottom and (view_manager and 0.9 or 1.3) or 0)
 			local col_w = w / 3 - 0.2
@@ -453,14 +438,14 @@ showform = function(player)
 					core.hypertext_escape(map_title)})
 			end
 
+		-- Unassigned players may close the form and reopen it with
+		-- /teamform. Only close-locked rostered players need Leave Game.
 		if not manager and not spectator_approved and table.indexof(readied, playername) == -1 and
-				not starting then
-			if locked[playername] then
-				table.insert(out, "allow_close[false]")
-				table.insert(out, "style[leave_game;bgcolor=#CC0000;textcolor=#FFFFFF]")
-				table.insert(out, {"button[%f,%f;3,0.9;leave_game;Leave Game]", w - 3.1, bottom_y - 0.1})
-				table.insert(out, {"tooltip[leave_game;Disconnect from the server]"})
-			end
+				not starting and locked[playername] then
+			table.insert(out, "allow_close[false]")
+			table.insert(out, "style[leave_game;bgcolor=#CC0000;textcolor=#FFFFFF]")
+			table.insert(out, {"button[%f,%f;3,0.9;leave_game;Leave Game]", w - 3.1, bottom_y - 0.1})
+			table.insert(out, {"tooltip[leave_game;Disconnect from the server]"})
 		end
 
 			if view_manager then
@@ -473,7 +458,8 @@ showform = function(player)
 				table.insert(out, {"dropdown[%f,0;%f;map_select;%s;%d;true]", 11.5, 3.5,
 					items, pending_idx})
 				table.insert(out, {"button[0,0;1.9,0.8;swap_colors;Swap Teams]"})
-				table.insert(out, {"tooltip[swap_colors;Swap which in-game color each team is assigned]"})
+				table.insert(out, {"tooltip[swap_colors;%s]",
+					tip("Swap which in-game color each team is assigned")})
 			end
 
 			local pending_colors = get_pending_colors()
@@ -516,7 +502,8 @@ showform = function(player)
 						"Prefix [Team Name\\]: to name the team.]", add_field(1)})
 					table.insert(out, {"button[0.3,9.4;2.6,0.9;open_add1;Submit]"})
 					table.insert(out, {"button[3.0,9.4;1.7,0.9;clear_team1;Clear]"})
-					table.insert(out, {"tooltip[open_add1;Add these players to team 1]"})
+					table.insert(out, {"tooltip[open_add1;%s]",
+						tip("Add these players to team 1")})
 				else
 					table.insert(out, {"button[0.3,8.52;2.6,0.9;open_add1;Add players]"})
 					table.insert(out, {"button[3.0,8.52;1.7,0.9;clear_team1;Clear]"})
@@ -535,7 +522,8 @@ showform = function(player)
 						"Prefix [Team Name\\]: to name the team.]", add_field(2)})
 					table.insert(out, {"button[%f,9.4;2.6,0.9;open_add2;Submit]", col2_x + 0.3})
 					table.insert(out, {"button[%f,9.4;1.7,0.9;clear_team2;Clear]", col2_x + 3.0})
-					table.insert(out, {"tooltip[open_add2;Add these players to team 2]"})
+					table.insert(out, {"tooltip[open_add2;%s]",
+						tip("Add these players to team 2")})
 				else
 					table.insert(out, {"button[%f,8.52;2.6,0.9;open_add2;Add players]", col2_x + 0.3})
 					table.insert(out, {"button[%f,8.52;1.7,0.9;clear_team2;Clear]", col2_x + 3.0})
@@ -546,10 +534,14 @@ showform = function(player)
 				table.insert(out, {"field_close_on_enter[%s;false]", add_field(2)})
 				table.insert(out, {"field_close_on_enter[team1_name;false]"})
 				table.insert(out, {"field_close_on_enter[team2_name;false]"})
-				table.insert(out, {"tooltip[clear_team1;Remove everyone from team 1 and reset its name]"})
-				table.insert(out, {"tooltip[clear_team2;Remove everyone from team 2 and reset its name]"})
-				table.insert(out, {"tooltip[team1;Double-click a member to remove them from the team]"})
-				table.insert(out, {"tooltip[team2;Double-click a member to remove them from the team]"})
+				table.insert(out, {"tooltip[clear_team1;%s]",
+					tip("Remove everyone from team 1 and reset its name")})
+				table.insert(out, {"tooltip[clear_team2;%s]",
+					tip("Remove everyone from team 2 and reset its name")})
+				table.insert(out, {"tooltip[team1;%s]",
+					tip("Double-click a member to remove them from the team")})
+				table.insert(out, {"tooltip[team2;%s]",
+					tip("Double-click a member to remove them from the team")})
 				local tcolor1 = team_display_color(color1)
 				local tcolor2 = team_display_color(color2)
 
@@ -563,10 +555,21 @@ showform = function(player)
 
 				table.insert(out, {"button[%f,8.52;2.5,0.9;assign_spectator1;%s]", col3_x, TEAM[1] or "1"})
 				table.insert(out, {"button[%f,8.52;2.5,0.9;assign_spectator2;%s]", col3_x + 2.5, TEAM[2] or "2"})
-				table.insert(out, {"tooltip[assign_spectator1;Assign the selected spectator to %s]", TEAM[1] or "1"})
-				table.insert(out, {"tooltip[assign_spectator2;Assign the selected spectator to %s]", TEAM[2] or "2"})
-			table.insert(out, {"tooltip[spectators;Single-click to select, then assign " ..
-				"with a team button below. Double-click to toggle the allowed-spectator mark.]"})
+				table.insert(out, {"tooltip[assign_spectator1;%s]",
+					tip("Assign the selected spectator to " .. (TEAM[1] or "1"))})
+				table.insert(out, {"tooltip[assign_spectator2;%s]",
+					tip("Assign the selected spectator to " .. (TEAM[2] or "2"))})
+			-- select and the double-click spectator mark work while locked;
+			-- only assigning to a team is blocked
+			local spectator_tip = "Single-click to select, then assign " ..
+				"with a team button below. Double-click to toggle the allowed-spectator mark."
+
+			if teams_locked then
+				spectator_tip = "Teams are locked - unlock them to assign spectators to a team. " ..
+					"Double-click still toggles the allowed-spectator mark."
+			end
+
+			table.insert(out, {"tooltip[spectators;%s]", spectator_tip})
 			end
 
 		local lock_label = teams_locked and "Unlock Teams" or "Lock Teams"
@@ -668,13 +671,9 @@ showform = function(player)
 			end
 
 			if fields.try_quit then
-				if locked[pname] then
-					core.chat_send_player(pname,
-						"[tournament] Please ready up in /teamform first")
-				else
-					core.chat_send_player(pname,
-						"[tournament] Please wait for an admin to assign you a team")
-				end
+				core.chat_send_player(pname, locked[pname] and
+					"[tournament] Please ready up in /teamform first" or
+					"[tournament] Please wait for an admin to assign you a team")
 
 				return
 			end
@@ -782,13 +781,12 @@ showform = function(player)
 
 			for _, name in ipairs(names) do
 				local was = locked[name]
+				local ok = assign_one(name, teamnum)
 
-				if assign_one(name, teamnum) then
-					if was ~= teamnum then
-						changed = true
-						table.insert(added, name)
-					end
-				else
+				if ok and was ~= teamnum then
+					changed = true
+					table.insert(added, name)
+				elseif not ok then
 					table.insert(bad, name)
 				end
 			end
@@ -809,10 +807,10 @@ showform = function(player)
 			-- the list sticks to the new occupant of its old row
 			if changed then
 				local pick = selected_spectator[pname]
+				local after = get_unassigned_players()
 
-				if pick and not table.indexof(get_unassigned_players(), pick) then
+				if pick and not table.indexof(after, pick) then
 					local idx = table.indexof(before, pick) or 1
-					local after = get_unassigned_players()
 					selected_spectator[pname] = after[math.min(idx, #after)]
 				end
 			end
@@ -853,6 +851,34 @@ showform = function(player)
 			end
 
 			return true
+		end
+
+		local function clear_team(teamnum)
+			if not modifications_allowed() then
+				return "refresh"
+			end
+
+			-- collect first: deleting keys during pairs() traversal
+			-- is undefined in Lua 5.1 and can skip entries, leaving
+			-- ghosts. Iterate the raw roster so offline ghosts are
+			-- cleared too.
+			local todel = {}
+
+			for name, tnum in pairs(locked) do
+				if tnum == teamnum then
+					todel[#todel + 1] = name
+				end
+			end
+
+			for _, name in ipairs(todel) do
+				locked[name] = nil
+				unready(name)
+			end
+
+			TEAM[teamnum] = "Team " .. teamnum
+			field_epoch[teamnum] = field_epoch[teamnum] + 1
+			reshow_form()
+			return "refresh"
 		end
 
 		-- Read a typed add-field value even if our render is a stale epoch
@@ -959,17 +985,12 @@ showform = function(player)
 				return "refresh"
 			end
 
-			if fields.key_enter_field then
-				local team = fields.key_enter_field:match("^team([12])_add_")
+			local key_field = fields.key_enter_field
+			local team = key_field and tonumber(key_field:match("^team([12])_add_") or "") or nil
+			local value = team and fields[key_field]
 
-				if team then
-					team = tonumber(team)
-					local val = fields[fields.key_enter_field]
-
-					if val and val:trim() ~= "" then
-						return assign_names(val, team)
-					end
-				end
+			if team and value and value:trim() ~= "" then
+				return assign_names(value, team)
 			end
 
 			for _, spec in ipairs({{key = "team1", team = 1}, {key = "team2", team = 2}}) do
@@ -1007,59 +1028,11 @@ showform = function(player)
 				end
 
 			if fields.clear_team1 then
-				if not modifications_allowed() then
-					return "refresh"
-				end
-
-				-- collect first: deleting keys during pairs() traversal
-				-- is undefined in Lua 5.1 and can skip entries, leaving
-				-- ghosts. Iterate the raw roster so offline ghosts are
-				-- cleared too.
-				local todel = {}
-
-				for name, tnum in pairs(locked) do
-					if tnum == 1 then
-						todel[#todel + 1] = name
-					end
-				end
-
-				for _, name in ipairs(todel) do
-					locked[name] = nil
-					unready(name)
-				end
-
-				TEAM[1] = "Team 1"
-				field_epoch[1] = field_epoch[1] + 1
-				reshow_form()
-				return "refresh"
+				return clear_team(1)
 			end
 
 			if fields.clear_team2 then
-				if not modifications_allowed() then
-					return "refresh"
-				end
-
-				-- collect first: deleting keys during pairs() traversal
-				-- is undefined in Lua 5.1 and can skip entries, leaving
-				-- ghosts. Iterate the raw roster so offline ghosts are
-				-- cleared too.
-				local todel = {}
-
-				for name, tnum in pairs(locked) do
-					if tnum == 2 then
-						todel[#todel + 1] = name
-					end
-				end
-
-				for _, name in ipairs(todel) do
-					locked[name] = nil
-					unready(name)
-				end
-
-				TEAM[2] = "Team 2"
-				field_epoch[2] = field_epoch[2] + 1
-				reshow_form()
-				return "refresh"
+				return clear_team(2)
 			end
 
 			-- NOTE: picks are tracked by player name (never by row index),
@@ -1193,26 +1166,17 @@ local function all_locked_readied()
 	local n1, n2 = 0, 0
 
 	for pname, tnum in pairs(locked) do
-		-- approval meta is only readable while online, so check that
-		-- first: an offline rostered player blocks the start outright.
-		-- the match waits until everyone added is online and readied
+		-- everyone added must be online and readied: approval meta is
+		-- only readable while online, and being rostered means playing
 		-- (a short-handed team starts via /force_start instead)
-		if not core.get_player_by_name(pname) then
+		if not core.get_player_by_name(pname) or table.indexof(readied, pname) == -1 then
 			return false
 		end
 
-		-- everyone on a roster gates the start, no exceptions: being
-		-- rostered means you're playing, so even an approved spectator
-		-- must ready once assigned to a team. Rostered managers ready
-		-- exactly like players.
 		if tnum == 1 then
 			n1 = n1 + 1
 		elseif tnum == 2 then
 			n2 = n2 + 1
-		end
-
-		if table.indexof(readied, pname) == -1 then
-			return false
 		end
 	end
 

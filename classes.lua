@@ -375,9 +375,8 @@ end
 
 local function select_class(player, classname)
 	player = PlayerObj(player)
-	if not player then return end
 
-	if ctf_modebase.current_mode == "tournament" and dist_from_flag(player) <= 5 then
+	if player and ctf_modebase.current_mode == "tournament" and dist_from_flag(player) <= 5 then
 		cooldowns:set(player, CLASS_SWITCH_COOLDOWN)
 		classes.set(player, classname)
 	end
@@ -397,19 +396,27 @@ function classes.show_class_formspec(player)
 	player = PlayerObj(player)
 	if not player then return end
 
-	if not cooldowns:get(player) then
-		if ctf_modebase.current_mode ~= "tournament" then return end
+	if cooldowns:get(player) then
+		hud_events.new(player, {
+			quick = true,
+			text = "You can only change your class every "..CLASS_SWITCH_COOLDOWN.." seconds",
+			color = "warning",
+		})
+		return
+	end
 
-		if dist_from_flag(player) > 5 then
-			hud_events.new(player, {
-				quick = true,
-				text = "You can only change class at your flag!",
-				color = "warning",
-			})
-			return
-		end
+	if ctf_modebase.current_mode ~= "tournament" then return end
 
-		local pteam = ctf_teams.get(player)
+	if dist_from_flag(player) > 5 then
+		hud_events.new(player, {
+			quick = true,
+			text = "You can only change class at your flag!",
+			color = "warning",
+		})
+		return
+	end
+
+	local pteam = ctf_teams.get(player)
 
 		ctf_gui.show_formspec(player, "tournament_mode:class_form", function(context)
 			local form_x, form_y = 12, 10
@@ -504,9 +511,7 @@ function classes.show_class_formspec(player)
 						context.class = class
 
 						return "refresh"
-					end
-
-					if fields["select_"..class] then
+					elseif fields["select_"..class] then
 						if dist_from_flag(player) > 5 then
 							hud_events.new(player, {
 								quick = true,
@@ -522,13 +527,6 @@ function classes.show_class_formspec(player)
 				end
 			end,
 		})
-	else
-		hud_events.new(player, {
-			quick = true,
-			text = "You can only change your class every "..CLASS_SWITCH_COOLDOWN.." seconds",
-			color = "warning",
-		})
-	end
 end
 
 function classes.is_restricted_item(player, name)
@@ -569,7 +567,7 @@ end
 
 function classes.finish()
 	for _, player in pairs(minetest.get_connected_players()) do
-		classes.reset_class_cooldowns()
+		classes.reset_class_cooldowns(player)
 
 		player:set_properties({hp_max = (minetest.PLAYER_MAX_HP_DEFAULT * 10), visual_size = vector.new(1, 1, 1)})
 		physics.remove(player:get_player_name(), "tournament_mode:class_physics")
