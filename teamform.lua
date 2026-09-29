@@ -455,10 +455,12 @@ showform = function(player)
 
 		if not manager and not spectator_approved and table.indexof(readied, playername) == -1 and
 				not starting then
-			table.insert(out, "allow_close[false]")
-			table.insert(out, "style[leave_game;bgcolor=#CC0000;textcolor=#FFFFFF]")
-			table.insert(out, {"button[%f,%f;3,0.9;leave_game;Leave Game]", w - 3.1, bottom_y - 0.1})
-			table.insert(out, {"tooltip[leave_game;Disconnect from the server]"})
+			if locked[playername] then
+				table.insert(out, "allow_close[false]")
+				table.insert(out, "style[leave_game;bgcolor=#CC0000;textcolor=#FFFFFF]")
+				table.insert(out, {"button[%f,%f;3,0.9;leave_game;Leave Game]", w - 3.1, bottom_y - 0.1})
+				table.insert(out, {"tooltip[leave_game;Disconnect from the server]"})
+			end
 		end
 
 			if view_manager then
