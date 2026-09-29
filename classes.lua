@@ -11,7 +11,7 @@ local class_props = {
 		name = "Knight",
 		color = "grey",
 		description = "High HP class with a sword capable of short damage bursts",
-		hp_max = 30,
+		hp_max = 300,
 		visual_size = vector.new(1.1, 1.05, 1.1),
 		items = {
 			"tournament_mode:knight_sword",
@@ -109,7 +109,7 @@ end
 -- ctf_melee.register_sword("tournament_mode:knight_sword", {
 -- 	description = "Knight Sword",
 -- 	inventory_image = "default_tool_bronzesword.png",
--- 	damage_groups = {fleshy = 5},
+-- 	damage_groups = {fleshy = 50},
 -- })
 
 local KNIGHT_COOLDOWN_TIME = 26
@@ -122,7 +122,7 @@ ctf_melee.simple_register_sword("tournament_mode:knight_sword", {
 	inventory_image = "default_tool_bronzesword.png",
 	inventory_overlay = "ctf_modebase_special_item.png",
 	wield_image = "default_tool_bronzesword.png",
-	damage_groups = {fleshy = 7},
+	damage_groups = {fleshy = 70},
 	full_punch_interval = 0.7,
 	rightclick_func = function(itemstack, user, pointed)
 		if ctf_settings.get(user, "ctf_classes:simple_knight_activate") ~= "true" then
@@ -183,7 +183,7 @@ ctf_ranged.simple_register_gun("tournament_mode:ranged_rifle", {
 	fire_sound = "ctf_ranged_rifle",
 	rounds = 0,
 	range = 150,
-	damage = 5,
+	damage = 50,
 	fire_interval = 0.8,
 	liquid_travel_dist = 4,
 	rightclick_func = function(itemstack, user, pointed)
@@ -276,8 +276,8 @@ ctf_healing.register_bandage("tournament_mode:support_bandage", {
 	inventory_overlay = "ctf_modebase_special_item.png",
 	wield_image = "ctf_healing_bandage.png",
 	heal_percent = HEAL_PERCENT,
-	heal_min = 4,
-	heal_max = 5,
+	heal_min = 40,
+	heal_max = 50,
 	rightclick_func = function(itemstack, user, pointed)
 		if ctf_settings.get(user, "ctf_classes:simple_support_activate") ~= "true" then
 			local ctl = user:get_player_control()
@@ -301,12 +301,12 @@ ctf_healing.register_bandage("tournament_mode:support_bandage", {
 			local step = math.floor(65534 / IMMUNITY_TIME)
 			ctf_modebase.update_wear.start_update(pname, "tournament_mode:support_bandage", step, false,
 			function()
-				ctf_modebase.remove_immunity(user)
+				ctf_modebase.remove_immunity(pname)
 				local dstep = math.floor(65534 / IMMUNITY_COOLDOWN)
 				ctf_modebase.update_wear.start_update(pname, "tournament_mode:support_bandage", dstep, true)
 			end,
 			function()
-				ctf_modebase.remove_immunity(user)
+				ctf_modebase.remove_immunity(pname)
 			end)
 
 			itemstack:set_wear(1)
@@ -339,7 +339,7 @@ function classes.update(player)
 	local class = classes.get(player)
 
 	player:set_properties({
-		hp_max = class.hp_max or minetest.PLAYER_MAX_HP_DEFAULT,
+		hp_max = class.hp_max or (minetest.PLAYER_MAX_HP_DEFAULT * 10),
 		visual_size = class.visual_size or vector.new(1, 1, 1)
 	})
 
@@ -450,7 +450,7 @@ function classes.show_class_formspec(player)
 					(form_x/2)+0.6 - pad,
 					form_y-2.4,
 					class_prop.description,
-					class_prop.hp_max or minetest.PLAYER_MAX_HP_DEFAULT,
+					(class_prop.hp_max or (minetest.PLAYER_MAX_HP_DEFAULT * 10)) / 10,
 					class_prop.physics and class_prop.physics.speed and
 							"<img name=sprint_stamina_icon.png width=20 float=left> "..class_prop.physics.speed.."x Speed\n" or "",
 					class_prop.items_markup,
@@ -571,7 +571,7 @@ function classes.finish()
 	for _, player in pairs(minetest.get_connected_players()) do
 		classes.reset_class_cooldowns()
 
-		player:set_properties({hp_max = minetest.PLAYER_MAX_HP_DEFAULT, visual_size = vector.new(1, 1, 1)})
+		player:set_properties({hp_max = (minetest.PLAYER_MAX_HP_DEFAULT * 10), visual_size = vector.new(1, 1, 1)})
 		physics.remove(player:get_player_name(), "tournament_mode:class_physics")
 	end
 end

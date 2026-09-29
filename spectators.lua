@@ -7,15 +7,6 @@ ctf_teams.team.spectator = {
 
 table.insert(ctf_teams.teamlist, "spectator")
 
-minetest.register_on_joinplayer(function(player)
-	local pname = player:get_player_name()
-	if pname:match("_spectate") and
-	not minetest.check_player_privs(player, {tournament_spectator = true}) then
-		core.change_player_privs(pname, {tournament_spectator = true, fly = true, noclip = true})
-		core.kick_player(pname, "Spectator privs granted", true)
-	end
-end)
-
 minetest.register_on_player_hpchange(function(player, hp_change, reason)
 	if ctf_modebase.match_started and ctf_teams.get(player) == "spectator" then
 		return 0
