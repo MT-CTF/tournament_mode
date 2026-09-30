@@ -29,6 +29,7 @@ local spectator_statbars = {}
 -- hide a player: restores never guess CTF/player_api/engine defaults
 local spectator_props = {}
 local pending_map = "two_hills"
+local pending_mode = "classes"
 local swap_colors = false
 
 
@@ -51,6 +52,7 @@ local function save_carryover()
 	storage:set_string("locked", core.serialize(locked))
 	storage:set_string("team_names", core.serialize(TEAM))
 	storage:set_string("pending_map", pending_map or "")
+	storage:set_string("pending_mode", pending_mode or "")
 	storage:set_string("swap_colors", swap_colors and "true" or "")
 end
 
@@ -87,6 +89,12 @@ local function load_carryover()
 
 	if type(map) == "string" and map ~= "" then
 		pending_map = map
+	end
+
+	local mode = storage:get_string("pending_mode")
+
+	if type(mode) == "string" and mode ~= "" then
+		pending_mode = mode
 	end
 
 	swap_colors = storage:get_string("swap_colors") == "true"
@@ -153,21 +161,64 @@ local function count_playable_teams(map)
 	return n
 end
 
-local function map_is_playable(dirname)
+local function get_mode_options()
+	local out = {}
+
+	for _, name in ipairs(ctf_modebase.modelist) do
+		if ctf_modebase.modes[name] then
+			table.insert(out, name)
+		end
+	end
+
+	table.sort(out)
+	return out
+end
+
+local function get_pending_mode()
+	if ctf_modebase.modes[pending_mode] then
+		return pending_mode
+	end
+
+	if ctf_modebase.modes["classes"] then
+		return "classes"
+	end
+
+	local opts = get_mode_options()
+
+	if #opts > 0 then
+		return opts[1]
+	end
+
+	return "classes"
+end
+
+local function map_supports_mode(map, mode)
+	return not map.game_modes or table.indexof(map.game_modes, mode) ~= -1
+end
+
+local function map_is_playable(dirname, mode)
+	mode = mode or get_pending_mode()
 	local idx = dirname and ctf_modebase.map_catalog.map_dirnames[dirname]
 
 	if not idx then
 		return false
 	end
 
-	return count_playable_teams(ctf_modebase.map_catalog.maps[idx]) == 2
+	local map = ctf_modebase.map_catalog.maps[idx]
+
+	if count_playable_teams(map) ~= 2 then
+		return false
+	end
+
+	return map_supports_mode(map, mode)
 end
 
-local function get_map_options()
+local function get_map_options(mode)
+	mode = mode or get_pending_mode()
 	local out = {}
 
 	for _, map in ipairs(ctf_modebase.map_catalog.maps) do
-		if count_playable_teams(map) == 2 then
+		if count_playable_teams(map) == 2 and map_supports_mode(map, mode) then
 			table.insert(out, {name = map.name, dirname = map.dirname})
 		end
 	end
@@ -394,6 +445,16 @@ showform = function(player)
 			local team2_players = get_team_players(2)
 			rendered_rosters[playername] = {team1_players, team2_players}
 			local unassigned_players = get_unassigned_players()
+			local mode_options = get_mode_options()
+			local pending_mode_idx = 1
+
+			for i, name in ipairs(mode_options) do
+				if name == get_pending_mode() then
+					pending_mode_idx = i
+					break
+				end
+			end
+
 			local map_options = get_map_options()
 			local pending_idx = 1
 
@@ -431,7 +492,7 @@ showform = function(player)
 			}
 
 			if view_manager then
-				table.insert(out, {"hypertext[2.1,0;9.9,1;map_title;<big>%s</big>]",
+				table.insert(out, {"hypertext[2.1,0;5.6,1;map_title;<big>%s</big>]",
 					core.hypertext_escape(map_title)})
 			else
 				table.insert(out, {"hypertext[0,0;14.8,1;map_title;<center><big>%s</big></center>]",
@@ -455,8 +516,18 @@ showform = function(player)
 					table.insert(items, opt.name)
 				end
 
-				table.insert(out, {"dropdown[%f,0;%f;map_select;%s;%d;true]", 11.5, 3.5,
+				local mode_items = {}
+
+				for _, name in ipairs(mode_options) do
+					table.insert(mode_items, HumanReadable(name))
+				end
+
+				table.insert(out, {"dropdown[%f,0;%f;mode_select;%s;%d;true]", 7.9, 3.3,
+					mode_items, pending_mode_idx})
+				table.insert(out, {"tooltip[mode_select;Tournament game mode]"})
+				table.insert(out, {"dropdown[%f,0;%f;map_select;%s;%d;true]", 11.4, 3.4,
 					items, pending_idx})
+				table.insert(out, {"tooltip[map_select;Maps supporting the selected mode]"})
 				table.insert(out, {"button[0,0;1.9,0.8;swap_colors;Swap Teams]"})
 				table.insert(out, {"tooltip[swap_colors;%s]",
 					tip("Swap which in-game color each team is assigned")})
@@ -906,11 +977,36 @@ showform = function(player)
 				return "refresh"
 			end
 
-			-- NOTE: the map dropdown submits its current value with every
-			-- click, so only treat an actual change as an action. Otherwise
-			-- the lock guard below would swallow every manager submission
-			-- (ready, assign, ...) while teams are locked.
-			if fields.map_select then
+		-- NOTE: the dropdowns submit their current value with every
+		-- click, so only treat an actual change as an action. Otherwise
+		-- the lock guard below would swallow every manager submission
+		-- (ready, assign, ...) while teams are locked.
+		if fields.mode_select then
+			local idx = tonumber(fields.mode_select) or
+				tonumber((fields.mode_select or ""):match(":(%d+)$"))
+			local opts = get_mode_options()
+
+			if idx and opts[idx] and opts[idx] ~= pending_mode then
+				if not modifications_allowed() then
+					return "refresh"
+				end
+
+				pending_mode = opts[idx]
+
+				if not map_is_playable(pending_map, pending_mode) then
+					local mopts = get_map_options(pending_mode)
+
+					if #mopts > 0 then
+						pending_map = mopts[1].dirname
+					end
+				end
+
+				reshow_form()
+				return "refresh"
+			end
+		end
+
+		if fields.map_select then
 				local idx = tonumber(fields.map_select) or
 					tonumber((fields.map_select or ""):match(":(%d+)$"))
 				local opts = get_map_options()
@@ -1086,16 +1182,33 @@ showform = function(player)
 					return "refresh"
 				end
 
-				-- rosters, not presence: locking with offline members is
-				-- fine, the start gate still waits until everyone added
-				-- is online and readied
-				if #get_team_players(1) < 1 or #get_team_players(2) < 1 then
-					core.chat_send_player(pname,
-						"[tournament] Each team needs at least one player to lock")
-					return "refresh"
-				end
+			-- rosters, not presence: locking with offline members is
+			-- fine, the start gate still waits until everyone added
+			-- is online and readied. Any filled 1v1 may lock; only an
+			-- empty team blocks, unless the other team has a manager
+			-- (test/debug matches).
+			local rosters = {get_team_players(1), get_team_players(2)}
 
-				teams_locked = true
+			for teamnum = 1, 2 do
+				if #rosters[teamnum] < 1 then
+					local other_has_manager = false
+
+					for _, member in ipairs(rosters[3 - teamnum]) do
+						if is_manager(member) then
+							other_has_manager = true
+							break
+						end
+					end
+
+					if not other_has_manager then
+						core.chat_send_player(pname,
+							"[tournament] Each team needs at least one player to lock")
+						return "refresh"
+					end
+				end
+			end
+
+			teams_locked = true
 				core.chat_send_all("[tournament] Teams locked in by " .. pname .. " - ready up to start!")
 				reshow_form()
 
@@ -1259,6 +1372,7 @@ return {
 	all_locked_readied = all_locked_readied,
 	update_readied_hud = update_readied_hud,
 	get_pending_map = get_pending_map,
+	get_pending_mode = get_pending_mode,
 	save_carryover = save_carryover,
 	showform = showform,
 	reshow_form = reshow_form,

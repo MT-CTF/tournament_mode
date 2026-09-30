@@ -1,49 +1,12 @@
-local RANKLIST = {
-	_sort = "score",
-	"score",
-	"flag_captures", "flag_attempts",
-	"kills", "kill_assists", "bounty_kills",
-	"deaths",
-	"hp_healed"
-}
-
-local rankings = ctf_rankings:init(RANKLIST)
 local hud = mhud.init()
-local recent_rankings = ctf_modebase.recent_rankings(rankings)
-local features = ctf_modebase.features(rankings, recent_rankings)
 
-local classes = ctf_core.include_files(
-	"classes.lua",
-	"paxel.lua",
-	"spectators.lua"
-)
+-- registers this mod's formspec input receiver (teamform clicks go
+-- through ctf_gui); previously ran via the deleted classes.lua
+ctf_gui.init()
+
+ctf_core.include_files("spectators.lua")
 
 -- team sizes are fully dynamic: the locked rosters define the match
-
-local old_bounty_reward_func = ctf_modebase.bounties.bounty_reward_func
-local old_get_next_bounty = ctf_modebase.bounties.get_next_bounty
-local old_get_skin = ctf_cosmetics.get_skin
-local custom_item_levels = table.copy(features.initial_stuff_item_levels)
-
-local function prioritize_medic_paxel(tooltype)
-	return function(item)
-		local iname = item:get_name()
-
-		if iname == "tournament_mode:support_paxel" then
-			return
-				features.initial_stuff_item_levels[tooltype](
-					ItemStack(string.format("default:%s_steel", tooltype))
-				) + 0.1,
-				true
-		else
-			return features.initial_stuff_item_levels[tooltype](item)
-		end
-	end
-end
-
-custom_item_levels.pick   = prioritize_medic_paxel("pick"  )
-custom_item_levels.axe    = prioritize_medic_paxel("axe"   )
-custom_item_levels.shovel = prioritize_medic_paxel("shovel")
 
 local MATCH_STARTED = false
 local QUEUE_MATCH_END = false
@@ -54,17 +17,8 @@ local MATCH_OVER = false
 -- same upvalue (it reads it only when rendering/handling, after load)
 local STARTING = false
 
-
---[[
-
-   _______                     ______
-  |__   __|                   |  ____|
-     | | ___  __ _ _ __ ___   | |__ ___  _ __ _ __ ___
-     | |/ _ \/ _` | '_ ` _ \  |  __/ _ \| '__| '_ ` _ \
-     | |  __/ (_| | | | | | | | | | (_) | |  | | | | | |
-     |_|\___|\__,_|_| |_| |_| |_|  \___/|_|  |_| |_| |_|
-
-]]
+local MATCH_ID = 0
+local allow_rejoin = {}
 
 local SPECTATE_META_KEY = "tournament_mode:spectate_allowed"
 
@@ -171,9 +125,396 @@ local TEAM = teamform.TEAM
 local spectator_statbars = teamform.spectator_statbars
 local spectator_props = teamform.spectator_props
 
+local promohud = mhud.init()
+
+--[[
+  Tournament injects its lobby/match flow into every builtin CTF mode by
+  wrapping the mode defs in ctf_modebase.modes (all modes share the
+  capturetheflag API, so third-party modes work too). Loadouts, class
+  logic, treasures and physics stay owned by each mode; only rostering,
+  spectators, match gating and win handling are tournament business.
+
+]]
+
+-- original callbacks per wrapped mode, keyed by mode name. Used to call
+-- through to the builtin behavior and for synthetic captures that must
+-- not recurse into the wrapper.
+local originals = {}
+
+-- the winning mode's rankings, for attempt counts. Third-party modes
+-- might not define recent_rankings, so callers must nil-check.
+local function get_recent_rankings()
+	local current = ctf_modebase:get_current_mode()
+	return current and current.recent_rankings or nil
+end
+
+local function update_attempt_hud()
+	local recent_rankings = get_recent_rankings()
+
+	if not recent_rankings then
+		return
+	end
+
+	local color1, color2 = teamnum_to_teamcolor(1), teamnum_to_teamcolor(2)
+
+	if not color1 or not color2 or not ctf_teams.team[color1] or not ctf_teams.team[color2] then
+		return
+	end
+
+	local team_attempts = recent_rankings.teams()
+	local text = core.colorize(ctf_teams.team[color1].color, TEAM[1]) ..
+		string.format(" (%d) vs (%d) ",
+			(team_attempts[color1] or {}).flag_attempts or 0,
+			(team_attempts[color2] or {}).flag_attempts or 0
+		) ..
+		core.colorize(ctf_teams.team[color2].color, TEAM[2])
+
+	for _, p in pairs(core.get_connected_players()) do
+		if ctf_teams.get(p) ~= "spectator" then
+			if not hud:exists(p, "attempt_info") then
+				hud:add(p, "attempt_info", {
+					hud_elem_type = "text",
+					position = {x = 0.5, y = 1},
+					offset = {x = 0, y = -112},
+					alignment = {x = "center", y = "up"},
+					color = 0xFFFFFF,
+					text = text
+				})
+			else
+				hud:change(p, "attempt_info", {text = text})
+			end
+		end
+	end
+end
+
+-- spectator invisibility + rostered-player restore. Runs after the
+-- builtin on_allocplayer so hiding wins over anything the mode granted.
+local function apply_tournament_alloc(player, new_team)
+	if new_team == "spectator" then
+		-- managers and approved spectators watch the match.
+		-- unapproved spectators pass through here during the
+		-- match-start allocation but are kicked right after by
+		-- the allocate_teams loop below
+		local pname = player:get_player_name()
+
+		-- snapshot everything below before mutating it. Kept across
+		-- consecutive spectates (still hidden then); a relog starts
+		-- from fresh engine visuals, so leave clears it again.
+		if not spectator_props[pname] then
+			local props = player:get_properties()
+			local armor = {}
+			local hud_flags = {}
+
+			for group, rating in pairs(player:get_armor_groups()) do
+				armor[group] = rating
+			end
+
+			for flag, value in pairs(player:hud_get_flags()) do
+				hud_flags[flag] = value
+			end
+
+			spectator_props[pname] = {
+				props = {
+					is_visible = props.is_visible,
+					pointable = props.pointable,
+					visual_size = {
+						x = props.visual_size.x,
+						y = props.visual_size.y,
+						z = props.visual_size.z,
+					},
+					selectionbox = {
+						props.selectionbox[1], props.selectionbox[2],
+						props.selectionbox[3], props.selectionbox[4],
+						props.selectionbox[5], props.selectionbox[6],
+					},
+				},
+				armor = armor,
+				hud_flags = hud_flags,
+			}
+		end
+
+		core.change_player_privs(player:get_player_name(), {
+			interact = false,
+			shout = false,
+			canafk = true,
+			fly = true, noclip = true, fast = true,
+		})
+
+		player:hud_set_flags({
+			hotbar = false,
+			healthbar = false,
+			crosshair = false,
+			wielditem = false,
+			breathbar = false,
+			minimap = false,
+			minimap_radar = false,
+			basic_debug = false,
+			chat = false,
+		})
+
+		player:set_properties({
+			is_visible = false,
+			pointable = false,
+			visual_size  = { x = 0, y = 0, z = 0 }, -- Workaround until we figure out if is_visibe should work for players
+			selectionbox = { 0, 0, 0, 0, 0, 0 },
+		})
+
+		for _, o in pairs(player:get_children()) do
+			if o.set_observers and o:get_pos() then
+				o:set_observers({})
+			else
+				o:set_properties({
+					is_visible = false,
+					pointable = false,
+				})
+			end
+		end
+
+		player:set_armor_groups({immortal = 1, fall_damage_add_percent = -100})
+
+		spectator_statbars[pname] = spectator_statbars[pname] or {}
+
+		for id, def in pairs(player:hud_get_all()) do
+			if def.type == "statbar" then
+				spectator_statbars[pname][id] = spectator_statbars[pname][id] or {
+					x = def.position.x,
+					y = def.position.y,
+				}
+
+				player:hud_change(id, "position", {x = -10, y = -10})
+			end
+		end
+
+		if promohud:exists(player, "match_info") then
+			promohud:remove(player, "match_info")
+		end
+
+		promohud:add(player, "match_info", {
+			hud_elem_type = "text",
+			position = {x = 0.5, y = 0},
+			alignment = {x = "center", y = "down"},
+			color = 0xFFFFFF,
+			text_scale = 3,
+			text = core.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
+					" vs " ..
+					core.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
+		})
+
+		if player.set_observers then
+			player:set_observers({[player:get_player_name()] = true})
+		end
+
+		player:set_pos(vector.add(ctf_map.current_map.pos1, vector.divide(ctf_map.current_map.size, 2)))
+	else
+		local name = player:get_player_name()
+
+		core.change_player_privs(name, {
+			interact = true,
+			shout = true,
+			canafk = true,
+			fly = false, noclip = false, fast = false,
+		})
+
+		-- mirror every spectator mutation above: last match's
+		-- spectators are routinely rostered for the next one.
+		-- properties/armor/hud come from the pre-hide snapshot,
+		-- never hardcoded defaults (CTF owns those values).
+		local snap = spectator_props[name]
+
+		if snap then
+			player:set_properties(snap.props)
+			player:set_armor_groups(snap.armor)
+			player:hud_set_flags(snap.hud_flags)
+			spectator_props[name] = nil
+		end
+
+		if player.set_observers then
+			player:set_observers()
+		end
+
+		if spectator_statbars[name] then
+			local all = player:hud_get_all()
+
+			for id, pos in pairs(spectator_statbars[name]) do
+				if all[id] then
+					player:hud_change(id, "position", pos)
+				end
+			end
+
+			spectator_statbars[name] = nil
+		end
+
+		if promohud:exists(player, "match_info") then
+			promohud:remove(player, "match_info")
+		end
+
+		for _, o in pairs(player:get_children()) do
+			if o.set_observers and o:get_pos() then
+				o:set_observers()
+			else
+				o:set_properties({
+					is_visible = true,
+					pointable = true,
+				})
+			end
+		end
+	end
+end
+
+local report_win -- assigned in the match-end section below
+
+local function wrap_mode(name, mode)
+	-- idempotent: the register_mode hook below and the after(0) sweep
+	-- can both reach the same mode. Identity-checked so a mode that
+	-- is re-registered with a fresh def still gets wrapped.
+	if originals[name] and originals[name].mode == mode then
+		return
+	end
+
+	local orig = {
+		mode = mode,
+		on_new_match = mode.on_new_match,
+		on_match_end = mode.on_match_end,
+		on_allocplayer = mode.on_allocplayer,
+		on_flag_take = mode.on_flag_take,
+		on_flag_capture = mode.on_flag_capture,
+	}
+	originals[name] = orig
+
+	-- rostered players go to their locked color, everyone else watches
+	-- as spectators; the allocate_teams loop below kicks the unapproved.
+	mode.team_allocator = function(player)
+		local pname = PlayerName(player)
+
+		if locked[pname] then
+			return teamnum_to_teamcolor(locked[pname])
+		end
+
+		return "spectator"
+	end
+
+	mode.allocate_teams = function(map_teams, ...)
+		local teams = table.copy(map_teams)
+		teams["spectator"] = {}
+
+		ctf_teams.allocate_teams(teams)
+
+		local players = core.get_connected_players()
+		table.shuffle(players)
+		for _, player in ipairs(players) do
+			local pname = player:get_player_name()
+
+			-- unapproved spectators are kicked at match start
+			-- instead of watching it
+			if not locked[pname] and not is_manager(pname) and
+					not is_spectate_allowed(pname) then
+				core.kick_player(pname, "Spectator access was not approved - " ..
+					"ask a tournament manager, then rejoin for the next match")
+			else
+				ctf_teams.allocate_player(player)
+			end
+		end
+	end
+
+	mode.on_allocplayer = function(player, new_team, ...)
+		if new_team and orig.on_allocplayer then
+			orig.on_allocplayer(player, new_team, ...)
+		end
+
+		if new_team then
+			apply_tournament_alloc(player, new_team)
+		end
+	end
+
+	mode.on_new_match = function(...)
+		if orig.on_new_match then
+			orig.on_new_match(...)
+		end
+
+		teamform.close_all_forms()
+
+		hud:clear_all()
+
+		ctf_modebase.build_timer.start(60 * 3)
+		MATCH_STARTED = true
+		STARTING = false
+	end
+
+	mode.on_match_end = function(...)
+		ctf_modebase.map_on_next_match = teamform.get_pending_map()
+		ctf_modebase.mode_on_next_match = teamform.get_pending_mode()
+
+		if orig.on_match_end then
+			return orig.on_match_end(...)
+		end
+	end
+
+	mode.on_flag_take = function(player, teamname, ...)
+		local out
+
+		if orig.on_flag_take then
+			out = orig.on_flag_take(player, teamname, ...)
+		end
+
+		update_attempt_hud()
+
+		if MATCH_STARTED and QUEUE_MATCH_END then
+			local o = originals[ctf_modebase.current_mode]
+
+			if o and o.on_flag_capture then
+				o.on_flag_capture(player, {teamname})
+			end
+
+			core.after(5, report_win, teamcolor_to_teamnum(ctf_teams.get(player)), MATCH_ID)
+		end
+
+		return out
+	end
+
+	mode.on_flag_capture = function(capturer, teams, ...)
+		-- teamnum derives from allocator lookups that return nil for
+		-- unknown colors; snapshot before the builtin runs, it may
+		-- move flags/teams around
+		local teamnum
+
+		if MATCH_STARTED then
+			teamnum = teamcolor_to_teamnum(ctf_teams.get(capturer))
+		end
+
+		local out
+
+		if orig.on_flag_capture then
+			out = orig.on_flag_capture(capturer, teams, ...)
+		end
+
+		if MATCH_STARTED and teamnum then
+			core.after(5, report_win, teamnum, MATCH_ID)
+		end
+
+		return out
+	end
+end
+
+-- modes registering after us (e.g. a third-party mode loaded later)
+-- must be wrapped too, or rostering/spectating silently won't
+-- apply to them
+local orig_register_mode = ctf_modebase.register_mode
+ctf_modebase.register_mode = function(name, def, ...)
+	orig_register_mode(name, def, ...)
+
+	-- register_mode stores def by reference, so this is the live table
+	wrap_mode(name, def)
+end
+
 core.after(0, function()
+	-- sweep the modes that registered before us (all builtin ones);
+	-- already-wrapped modes are skipped by the guard in wrap_mode
+	for name, mode in pairs(ctf_modebase.modes) do
+		wrap_mode(name, mode)
+	end
+
 	ctf_modebase.map_on_next_match = teamform.get_pending_map()
-	ctf_modebase.mode_on_next_match = "tournament"
+	ctf_modebase.mode_on_next_match = teamform.get_pending_mode()
 end)
 
 core.register_chatcommand("teamform", {
@@ -191,23 +532,6 @@ core.register_on_leaveplayer(function(player)
 	teamform.player_left(player)
 end)
 
---[[
-
-   _____  _                         _______             _    _
-  |  __ \| |                       |__   __|           | |  (_)
-  | |__) | | __ _ _   _  ___ _ __     | |_ __ __ _  ___| | ___ _ __   __ _
-  |  ___/| |/ _` | | | |/ _ \ '__|    | | '__/ _` |/ __| |/ / | '_ \ / _` |
-  | |    | | (_| | |_| |  __/ |       | | | | (_| | (__|   <| | | | | (_| |
-  |_|    |_|\__,_|\__, |\___|_|       |_|_|  \__,_|\___|_|\_\_|_| |_|\__, |
-                   __/ |                                              __/ |
-                  |___/                                              |___/
-
-]]
-
-local allow_rejoin = {}
-
-local MATCH_ID = 0
-
 core.register_privilege("tournament_manager", {
 	description = "Tournament Manager",
 	give_to_admin = false,
@@ -216,8 +540,6 @@ core.register_privilege("tournament_manager", {
 local start_new_match = ctf_modebase.start_new_match
 ctf_modebase.start_new_match = function()
 end
-
-local promohud = mhud.init()
 
 core.register_on_joinplayer(function(player)
 	local pname = player:get_player_name()
@@ -335,20 +657,7 @@ core.register_on_leaveplayer(function(player)
 	end
 end)
 
---[[
-
-    _____ _           _ _                          _____       _                       _   _
-   / ____| |         | | |                        |_   _|     | |                     | | (_)
-  | |    | |__   __ _| | | ___  _ __   __ _  ___    | |  _ __ | |_ ___  __ _ _ __ __ _| |_ _  ___  _ __
-  | |    | '_ \ / _` | | |/ _ \| '_ \ / _` |/ _ \   | | | '_ \| __/ _ \/ _` | '__/ _` | __| |/ _ \| '_ \
-  | |____| | | | (_| | | | (_) | | | | (_| |  __/  _| |_| | | | ||  __/ (_| | | | (_| | |_| | (_) | | | |
-   \_____|_| |_|\__,_|_|_|\___/|_| |_|\__, |\___| |_____|_| |_|\__\___|\__, |_|  \__,_|\__|_|\___/|_| |_|
-                                       __/ |                            __/ |
-                                      |___/                            |___/
-
-]]
-
-local function report_win(teamnum, match_id)
+report_win = function(teamnum, match_id)
 	-- teamnum derives from allocator lookups that return nil for
 	-- unknown colors; TEAM[nil] would error below (and in the delayed
 	-- core.after callers, 5s later)
@@ -364,11 +673,23 @@ local function report_win(teamnum, match_id)
 	teamform.save_carryover()
 
 	-- fresh process for every match: all lobby/match state starts clean
-	-- and rosters, team names, map and color swap come back from
+	-- and rosters, team names, map, mode and color swap come back from
 	-- modstorage on boot. Nothing may start a
 	-- new match in the meantime (rosters are still locked and readied).
 	MATCH_OVER = true
 	MATCH_STARTED = false
+
+	-- dropped items are saved into the map and would reload after the
+	-- reboot: wipe all objects (the engine excludes players) now and
+	-- again just before the restart, so nothing dropped during the
+	-- shutdown countdown survives either
+	core.clear_objects({mode = "full"})
+	core.after(9, function()
+		if MATCH_OVER then
+			core.clear_objects({mode = "full"})
+		end
+	end)
+
 	core.chat_send_all(core.colorize("cyan", "[TOURNAMENT] Server restarting in 10 seconds"))
 	core.request_shutdown("Tournament match over. Restarting for the next match.", true, 10)
 end
@@ -420,6 +741,18 @@ local function schedule_sudden_death(match_id)
 				return
 			end
 
+			local recent_rankings = get_recent_rankings()
+
+			-- modes without rankings can't break ties: next grab wins
+			if not recent_rankings then
+				QUEUE_MATCH_END = true
+				core.chat_send_all("\n" ..
+					core.colorize("green", "[ANNOUNCEMENT]") ..
+					" The next team to grab a flag will win!\n\n"
+				)
+				return
+			end
+
 			local players = recent_rankings.players()
 			local teams = recent_rankings.teams()
 			local color1, color2 = teamnum_to_teamcolor(1), teamnum_to_teamcolor(2)
@@ -434,17 +767,19 @@ local function schedule_sudden_death(match_id)
 				)
 			elseif attempts_1 > attempts_2 then
 				local best = best_online_attempt(players, color1)
+				local o = originals[ctf_modebase.current_mode]
 
-				if best then
-					features.on_flag_capture(PlayerObj(best), {color2})
+				if best and o and o.on_flag_capture then
+					o.on_flag_capture(PlayerObj(best), {color2})
 				end
 
 				report_win(1, match_id)
 			else
 				local best = best_online_attempt(players, color2)
+				local o = originals[ctf_modebase.current_mode]
 
-				if best then
-					features.on_flag_capture(PlayerObj(best), {color1})
+				if best and o and o.on_flag_capture then
+					o.on_flag_capture(PlayerObj(best), {color1})
 				end
 
 				report_win(2, match_id)
@@ -472,9 +807,11 @@ try_start_match = function(force)
 	-- everyone with the lobby form open drops to the player starting
 	-- view (no ready/unready/manager controls) while the match loads
 	teamform.reshow_form()
-	core.chat_send_all(core.colorize("cyan", "Match starting on " .. teamform.get_pending_map() .. "!"))
+	core.chat_send_all(core.colorize("cyan", "Match starting: " ..
+		HumanReadable(teamform.get_pending_mode()) .. " on " .. teamform.get_pending_map() .. "!"))
 	schedule_sudden_death(MATCH_ID)
 	ctf_modebase.map_on_next_match = teamform.get_pending_map()
+	ctf_modebase.mode_on_next_match = teamform.get_pending_mode()
 	start_new_match()
 	return true
 end
@@ -532,404 +869,6 @@ core.register_chatcommand("surrender", {
 		return true, "Team \"" .. (TEAM[loser] or loser) .. "\" surrendered"
 	end
 })
-
---[[
-
-   _______                                                _     __  __           _
-  |__   __|                                              | |   |  \/  |         | |
-     | | ___  _   _ _ __ _ __   __ _ _ __ ___   ___ _ __ | |_  | \  / | ___   __| | ___
-     | |/ _ \| | | | '__| '_ \ / _` | '_ ` _ \ / _ \ '_ \| __| | |\/| |/ _ \ / _` |/ _ \
-     | | (_) | |_| | |  | | | | (_| | | | | | |  __/ | | | |_  | |  | | (_) | (_| |  __/
-     |_|\___/ \__,_|_|  |_| |_|\__,_|_| |_| |_|\___|_| |_|\__| |_|  |_|\___/ \__,_|\___|
-
-]]
-
-ctf_modebase.register_mode("tournament", {
-	rounds = 1,
-	build_timer = 0, -- Disables default build timer, we will start it manually after team selection
-	exclusive = true, -- Unregister all other modes
-	treasures = {
-		["default:ladder_wood" ] = {                max_count = 20, rarity = 0.3, max_stacks = 5},
-		["default:torch"       ] = {                max_count = 20, rarity = 0.3, max_stacks = 5},
-
-		["ctf_teams:door_steel"] = {rarity = 0.2, max_stacks = 3},
-
-		["default:pick_steel"  ] = {rarity = 0.2, max_stacks = 2},
-		["default:shovel_steel"] = {rarity = 0.1, max_stacks = 1},
-		["default:axe_steel"   ] = {rarity = 0.1, max_stacks = 1},
-
-		["ctf_ranged:pistol_loaded"        ] = {rarity = 0.2 , max_stacks = 2},
-		["ctf_ranged:shotgun_loaded"       ] = {rarity = 0.05                },
-		["ctf_ranged:smg_loaded"           ] = {rarity = 0.05                },
-		["ctf_ranged:sniper_magnum_loaded" ] = {rarity = 0.05                },
-
-		["ctf_map:unwalkable_dirt"  ] = {min_count = 5, max_count = 26, max_stacks = 1, rarity = 0.1},
-		["ctf_map:unwalkable_stone" ] = {min_count = 5, max_count = 26, max_stacks = 1, rarity = 0.1},
-		["ctf_map:unwalkable_cobble"] = {min_count = 5, max_count = 26, max_stacks = 1, rarity = 0.1},
-		["ctf_map:spike"            ] = {min_count = 1, max_count =  5, max_stacks = 2, rarity = 0.2},
-		["ctf_map:damage_cobble"    ] = {min_count = 5, max_count = 20, max_stacks = 2, rarity = 0.2},
-		["ctf_map:reinforced_cobble"] = {min_count = 5, max_count = 25, max_stacks = 2, rarity = 0.2},
-
-		["ctf_ranged:ammo"    ] = {min_count = 3, max_count = 10, rarity = 0.1, max_stacks = 2},
-		["ctf_healing:medkit" ] = {                               rarity = 0.1, max_stacks = 2},
-
-		["ctf_grenades:frag" ]  = {rarity = 0.1, max_stacks = 1},
-		["ctf_grenades:smoke"]  = {rarity = 0.2, max_stacks = 2},
-		["ctf_grenades:poison"] = {rarity = 0.1, max_stacks = 2},
-	},
-	crafts = {
-		"ctf_ranged:ammo", "default:axe_mese", "default:axe_diamond", "default:shovel_mese", "default:shovel_diamond",
-		"ctf_map:damage_cobble", "ctf_map:spike", "ctf_map:reinforced_cobble 2",
-	},
-	physics = {sneak_glitch = true, new_move = true},
-	blacklisted_nodes = {"default:apple"},
-	team_chest_items = {
-		"default:cobble 99", "default:wood 99", "ctf_map:damage_cobble 24", "ctf_map:reinforced_cobble 24",
-		"default:torch 30", "ctf_teams:door_steel 2",
-	},
-	rankings = rankings,
-	recent_rankings = recent_rankings,
-	summary_ranks = RANKLIST,
-	is_bound_item = function(_, name)
-		if name:match("tournament_mode:") or name:match("ctf_melee:") or name == "ctf_healing:bandage" then
-			return true
-		end
-	end,
-	stuff_provider = function(player)
-		local initial_stuff = table.copy(classes.get(player).items or {})
-		table.insert_all(initial_stuff, {"default:pick_stone", "default:torch 15", "default:stick 5"})
-		return initial_stuff
-	end,
-	initial_stuff_item_levels = custom_item_levels,
-	is_restricted_item = classes.is_restricted_item,
-	on_mode_start = function()
-		ctf_modebase.bounties.bounty_reward_func = ctf_modebase.bounty_algo.kd.bounty_reward_func
-		ctf_modebase.bounties.get_next_bounty = ctf_modebase.bounty_algo.kd.get_next_bounty
-
-		ctf_cosmetics.get_skin = function(player)
-			if not ctf_teams.get(player) then
-				return old_get_skin(player)
-			end
-
-			return old_get_skin(player) .. classes.get_skin_overlay(player)
-		end
-	end,
-	on_mode_end = function()
-		ctf_modebase.bounties.bounty_reward_func = old_bounty_reward_func
-		ctf_modebase.bounties.get_next_bounty = old_get_next_bounty
-		ctf_cosmetics.get_skin = old_get_skin
-
-		classes.finish()
-	end,
-	on_new_match = function()
-		features.on_new_match()
-
-		classes.reset_class_cooldowns()
-
-		teamform.close_all_forms()
-
-		hud:clear_all()
-
-		ctf_modebase.build_timer.start(60 * 3)
-		MATCH_STARTED = true
-		STARTING = false
-	end,
-	on_match_end = function(...)
-		ctf_modebase.map_on_next_match = teamform.get_pending_map()
-		ctf_modebase.mode_on_next_match = "tournament"
-
-		features.on_match_end(...)
-	end,
-	allocate_teams = function(map_teams, dont_allocate_players, ...)
-		local teams = table.copy(map_teams)
-		teams["spectator"] = {}
-
-		local out = ctf_teams.allocate_teams(teams, true, ...)
-
-		local players = core.get_connected_players()
-		table.shuffle(players)
-		for _, player in ipairs(players) do
-			local pname = player:get_player_name()
-
-			-- unapproved spectators are kicked at match start
-			-- instead of watching it
-			if not locked[pname] and not is_manager(pname) and
-					not is_spectate_allowed(pname) then
-				core.kick_player(pname, "Spectator access was not approved - " ..
-					"ask a tournament manager, then rejoin for the next match")
-			else
-				ctf_teams.allocate_player(player)
-			end
-		end
-
-		return out
-	end,
-	team_allocator = function(player)
-		local pname = PlayerName(player)
-
-		if locked[pname] then
-			return teamnum_to_teamcolor(locked[pname])
-		end
-
-		-- non-rostered players allocate as spectators; the
-		-- allocate_teams loop above kicks the unapproved ones
-		return "spectator"
-	end,
-	on_allocplayer = function(player, new_team)
-		if new_team then
-			classes.update(player)
-			features.on_allocplayer(player, new_team)
-
-		if new_team == "spectator" then
-			-- managers and approved spectators watch the match.
-			-- unapproved spectators pass through here during the
-			-- match-start allocation but are kicked right after by
-			-- the allocate_teams loop above
-			local pname = player:get_player_name()
-
-			-- snapshot everything below before mutating it. Kept across
-			-- consecutive spectates (still hidden then); a relog starts
-			-- from fresh engine visuals, so leave clears it again.
-			if not spectator_props[pname] then
-				local props = player:get_properties()
-				local armor = {}
-				local hud_flags = {}
-
-				for group, rating in pairs(player:get_armor_groups()) do
-					armor[group] = rating
-				end
-
-				for flag, value in pairs(player:hud_get_flags()) do
-					hud_flags[flag] = value
-				end
-
-				spectator_props[pname] = {
-					props = {
-						is_visible = props.is_visible,
-						pointable = props.pointable,
-						visual_size = {
-							x = props.visual_size.x,
-							y = props.visual_size.y,
-							z = props.visual_size.z,
-						},
-						selectionbox = {
-							props.selectionbox[1], props.selectionbox[2],
-							props.selectionbox[3], props.selectionbox[4],
-							props.selectionbox[5], props.selectionbox[6],
-						},
-					},
-					armor = armor,
-					hud_flags = hud_flags,
-				}
-			end
-
-			core.change_player_privs(player:get_player_name(), {
-					interact = false,
-					shout = false,
-					canafk = true,
-					fly = true, noclip = true, fast = true,
-				})
-
-				player:hud_set_flags({
-					hotbar = false,
-					healthbar = false,
-					crosshair = false,
-					wielditem = false,
-					breathbar = false,
-					minimap = false,
-					minimap_radar = false,
-					basic_debug = false,
-					chat = false,
-				})
-
-				player:set_properties({
-					is_visible = false,
-					pointable = false,
-					visual_size  = { x = 0, y = 0, z = 0 }, -- Workaround until we figure out if is_visibe should work for players
-					selectionbox = { 0, 0, 0, 0, 0, 0 },
-				})
-
-				for _, o in pairs(player:get_children()) do
-					if o.set_observers and o:get_pos() then
-						o:set_observers({})
-					else
-						o:set_properties({
-							is_visible = false,
-							pointable = false,
-						})
-					end
-				end
-
-				player:set_armor_groups({immortal = 1, fall_damage_add_percent = -100})
-
-			spectator_statbars[pname] = spectator_statbars[pname] or {}
-
-			for id, def in pairs(player:hud_get_all()) do
-				if def.type == "statbar" then
-					spectator_statbars[pname][id] = spectator_statbars[pname][id] or {
-						x = def.position.x,
-						y = def.position.y,
-					}
-
-					player:hud_change(id, "position", {x = -10, y = -10})
-				end
-			end
-
-				if promohud:exists(player, "match_info") then
-					promohud:remove(player, "match_info")
-				end
-
-				promohud:add(player, "match_info", {
-					hud_elem_type = "text",
-					position = {x = 0.5, y = 0},
-					alignment = {x = "center", y = "down"},
-					color = 0xFFFFFF,
-					text_scale = 3,
-					text = core.colorize(ctf_teams.team[teamnum_to_teamcolor(1)].color, TEAM[1]) ..
-							" vs " ..
-							core.colorize(ctf_teams.team[teamnum_to_teamcolor(2)].color, TEAM[2])
-				})
-
-				if player.set_observers then
-					player:set_observers({[player:get_player_name()] = true})
-				end
-
-				player:set_pos(vector.add(ctf_map.current_map.pos1, vector.divide(ctf_map.current_map.size, 2)))
-			else
-				local name = player:get_player_name()
-
-				core.change_player_privs(name, {
-					interact = true,
-					shout = true,
-					canafk = true,
-					fly = false, noclip = false, fast = false,
-				})
-
-				-- mirror every spectator mutation above: last match's
-				-- spectators are routinely rostered for the next one.
-				-- properties/armor/hud come from the pre-hide snapshot,
-				-- never hardcoded defaults (CTF owns those values).
-				local snap = spectator_props[name]
-
-				if snap then
-					player:set_properties(snap.props)
-					player:set_armor_groups(snap.armor)
-					player:hud_set_flags(snap.hud_flags)
-					spectator_props[name] = nil
-				end
-
-				if player.set_observers then
-					player:set_observers()
-				end
-
-				if spectator_statbars[name] then
-					local all = player:hud_get_all()
-
-					for id, pos in pairs(spectator_statbars[name]) do
-						if all[id] then
-							player:hud_change(id, "position", pos)
-						end
-					end
-
-					spectator_statbars[name] = nil
-				end
-
-				if promohud:exists(player, "match_info") then
-					promohud:remove(player, "match_info")
-				end
-
-				for _, o in pairs(player:get_children()) do
-					if o.set_observers and o:get_pos() then
-						o:set_observers()
-					else
-						o:set_properties({
-							is_visible = true,
-							pointable = true,
-						})
-					end
-				end
-			end
-		end
-	end,
-	on_leaveplayer = features.on_leaveplayer,
-	on_dieplayer = features.on_dieplayer,
-	on_respawnplayer = function(player, ...)
-		features.on_respawnplayer(player, ...)
-
-		classes.reset_class_cooldowns(player)
-	end,
-	can_take_flag = features.can_take_flag,
-	on_flag_take = function(player, teamname, ...)
-		local out = features.on_flag_take(player, teamname, ...)
-		local color1, color2 = teamnum_to_teamcolor(1), teamnum_to_teamcolor(2)
-		local team_attempts = recent_rankings.teams()
-		local text = core.colorize(ctf_teams.team[color1].color, TEAM[1]) ..
-			string.format(" (%d) vs (%d) ",
-				(team_attempts[color1] or {}).flag_attempts or 0,
-				(team_attempts[color2] or {}).flag_attempts or 0
-			) ..
-			core.colorize(ctf_teams.team[color2].color, TEAM[2])
-
-		for _, p in pairs(core.get_connected_players()) do
-			if ctf_teams.get(p) ~= "spectator" then
-				if not hud:exists(p, "attempt_info") then
-					hud:add(p, "attempt_info", {
-						hud_elem_type = "text",
-						position = {x = 0.5, y = 1},
-						offset = {x = 0, y = -112},
-						alignment = {x = "center", y = "up"},
-						color = 0xFFFFFF,
-						text = text
-					})
-				else
-					hud:change(p, "attempt_info", {text = text})
-				end
-			end
-		end
-
-		if MATCH_STARTED and QUEUE_MATCH_END then
-			features.on_flag_capture(player, {teamname})
-			core.after(5, report_win, teamcolor_to_teamnum(ctf_teams.get(player)), MATCH_ID)
-		end
-
-		return out
-	end,
-	on_flag_drop = features.on_flag_drop,
-	on_flag_capture = function(capturer, teams, ...)
-		if MATCH_STARTED then
-			local teamnum = teamcolor_to_teamnum(ctf_teams.get(capturer))
-
-			core.after(5, report_win, teamnum, MATCH_ID)
-		end
-
-		return features.on_flag_capture(capturer, teams, ...)
-	end,
-	on_flag_rightclick = function(clicker)
-		classes.show_class_formspec(clicker)
-	end,
-	get_chest_access = function() return true, true end,
-	on_punchplayer = features.on_punchplayer,
-	can_punchplayer = features.can_punchplayer,
-	on_healplayer = features.on_healplayer,
-	calculate_knockback = function(player, hitter, time_from_last_punch, tool_capabilities, dir, distance, damage)
-		if features.can_punchplayer(player, hitter) and not tool_capabilities.damage_groups.ranged then
-			return 2 * (tool_capabilities.damage_groups.knockback or 1) * math.min(1, time_from_last_punch or 0)
-		else
-			return 0
-		end
-	end,
-})
-
---[[
-
-   __  __       _       _        _____ _             _         __  ______           _
-  |  \/  |     | |     | |      / ____| |           | |       / / |  ____|         | |
-  | \  / | __ _| |_ ___| |__   | (___ | |_ __ _ _ __| |_     / /  | |__   _ __   __| |
-  | |\/| |/ _` | __/ __| '_ \   \___ \| __/ _` | '__| __|   / /   |  __| | '_ \ / _` |
-  | |  | | (_| | || (__| | | |  ____) | || (_| | |  | |_   / /    | |____| | | | (_| |
-  |_|  |_|\__,_|\__\___|_| |_| |_____/ \__\__,_|_|   \__| /_/     |______|_| |_|\__,_|
-
-]]
 
 local timer = 0
 core.register_globalstep(function(dtime)
