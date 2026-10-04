@@ -31,6 +31,8 @@ local spectator_props = {}
 local pending_map = "two_hills"
 local pending_mode = "classes"
 local swap_colors = false
+local auto_capture_minutes = 15
+local nametag_visibility = "all"
 
 
 --[[
@@ -54,6 +56,8 @@ local function save_carryover()
 	storage:set_string("pending_map", pending_map or "")
 	storage:set_string("pending_mode", pending_mode or "")
 	storage:set_string("swap_colors", swap_colors and "true" or "")
+	storage:set_string("auto_capture_minutes", tostring(auto_capture_minutes))
+	storage:set_string("nametag_visibility", nametag_visibility)
 end
 
 local function load_carryover()
@@ -98,6 +102,21 @@ local function load_carryover()
 	end
 
 	swap_colors = storage:get_string("swap_colors") == "true"
+
+	local acm = tonumber(storage:get_string("auto_capture_minutes"))
+
+	if acm then
+		acm = math.floor(acm)
+	end
+
+	if acm and acm >= 1 and acm <= 60 then
+		auto_capture_minutes = acm
+	end
+
+	local nv = storage:get_string("nametag_visibility")
+	if nv == "all" or nv == "team_spectator" then
+		nametag_visibility = nv
+	end
 end
 
 load_carryover()
@@ -347,6 +366,11 @@ local showform
 local form_shown = {}
 local editing_team = {}
 local adding_open = {}
+local manager_tab = {}
+-- managers actively typing a new auto-capture value: same reshow
+-- protection as the roster typing flags, but scoped to actual
+-- editing so plain Settings viewers still get live updates
+local editing_timer = {}
 -- spectator list picks, tracked by player name so list shifts can't
 -- misassign. The rendered highlight is forced to the stored name's row.
 local selected_spectator = {}
@@ -365,9 +389,11 @@ end
 
 local function reshow_form(except)
 	for p in pairs(form_shown) do
-		-- never clobber a manager's form while they're typing:
+		-- never clobber a manager's form while they're typing
+		-- (roster add/name fields, or the Settings timer field):
 		-- their own submit/cancel refreshes them instead
-		if (not except or p ~= except) and not adding_open[p] and not editing_team[p] then
+		if (not except or p ~= except) and not adding_open[p] and not editing_team[p]
+				and not editing_timer[p] then
 			local player = core.get_player_by_name(p)
 
 			if player then
@@ -465,7 +491,13 @@ showform = function(player)
 				end
 			end
 
-			local map_title = map_options[pending_idx] and map_options[pending_idx].name or get_pending_map()
+			local map_title = map_options[pending_idx]
+				and map_options[pending_idx].name
+				or get_pending_map()
+			local mode_name = mode_options[pending_mode_idx]
+				and HumanReadable(mode_options[pending_mode_idx])
+				or get_pending_mode()
+			map_title = map_title .. " - " .. mode_name
 
 			-- force the highlight to the stored pick's row (a nonzero
 			-- index overrides the client's preserved one); 0 preserves.
@@ -476,22 +508,64 @@ showform = function(player)
 				selected_idx = table.indexof(unassigned_players, pick) or 0
 			end
 
+			local current_tab = manager_tab[playername] or "1"
+			local is_settings_tab = view_manager and current_tab == "2"
+			local tab_idx = is_settings_tab and "2" or "1"
+
+			if is_settings_tab then
+				local sw, sh = 15, 7.2
+				local mode_items = {}
+
+				for _, name in ipairs(mode_options) do
+					table.insert(mode_items, HumanReadable(name))
+				end
+
+				local nv_idx = nametag_visibility == "all" and 1 or 2
+				local s_out = {
+					{"size[%d,%f]", sw, sh},
+					"formspec_version[4]",
+					{"background[-0.1,-0.1;%f,%f;%s]", sw + 0.2, sh + 0.5,
+						get_pending_map() .. "_screenshot.png^[opacity:25]"},
+					{"tabheader[0,0;teamform_tabs;Main,Settings;%s;true;false]", tab_idx},
+					{"label[0.3,0.5;Match Settings]"},
+					{"dropdown[0.3,1.1;3.5;mode_select;%s;%d;true]", mode_items, pending_mode_idx},
+					{"tooltip[mode_select;Tournament game mode]"},
+				}
+
+				if editing_timer[playername] then
+					table.insert(s_out,
+						{"field[0.6,2.8;3,0.5;auto_capture_minutes;Auto-Capture Timer (minutes);%d]", auto_capture_minutes})
+					table.insert(s_out,
+						{"tooltip[auto_capture_minutes;Minutes until sudden death activates (1-60)]"})
+					table.insert(s_out, {"button[3.3,2.5;1.5,0.5;save_auto_capture;Save]"})
+					table.insert(s_out, {"tooltip[save_auto_capture;Save the auto-capture timer]"})
+					table.insert(s_out, {"button[5.0,2.5;1.5,0.5;cancel_auto_capture;Cancel]"})
+					table.insert(s_out, {"tooltip[cancel_auto_capture;Close without changing the timer]"})
+					table.insert(s_out, "field_close_on_enter[auto_capture_minutes;false]")
+				else
+					table.insert(s_out, {"label[0.3,2.5;Auto-Capture Timer: %d minute%s]",
+						auto_capture_minutes, auto_capture_minutes == 1 and "" or "s"})
+					table.insert(s_out, {"button[3.3,2.5;1.5,0.5;edit_auto_capture;Change]"})
+					table.insert(s_out, {"tooltip[edit_auto_capture;Change the auto-capture timer (1-60 minutes)]"})
+				end
+
+				table.insert(s_out, {"label[0.3,3.2;Nametag Visibility]"})
+				table.insert(s_out, {"dropdown[0.3,3.7;4.5;nametag_visibility;%s;%d;true]",
+					{"All Players", "Team & Spectators Only"}, nv_idx})
+				table.insert(s_out, {"tooltip[nametag_visibility;Who can see player nametags]"})
+
+				return ctf_gui.list_to_formspec_str(s_out)
+			end
+
 			local out = {
 				{"size[%d,%f]", w, (manager and (h - 0.3) or (h - 0.4))},
 				"formspec_version[4]",
 				{"background[-0.1,-0.1;%f,%f;%s]", w+0.2, h + 0.1,
 					get_pending_map() .. "_screenshot.png^[opacity:" .. (view_manager and 25 or 40) .. "]"},
-				{"label[%f,1;Spectators (unassigned)]", col3_x},
-				{"box[0,1.8;%f,6.5;#00000080]", col_w},
-				{"box[%f,1.8;%f,6.5;#00000080]", col2_x, col_w},
-				{"box[%f,1.8;%f,6.5;#00000080]", col3_x, col_w},
-				{"textlist[0,1.8;%f,6.5;team1;" .. color_readied(team1_players) .. ";0;true]", col_w},
-				{"textlist[%f,1.8;%f,6.5;team2;" .. color_readied(team2_players) .. ";0;true]", col2_x, col_w},
-				{"textlist[%f,1.8;%f,6.5;spectators;" .. color_unassigned(unassigned_players) ..
-					";%d;true]", col3_x, col_w, selected_idx},
 			}
 
 			if view_manager then
+				table.insert(out, {"tabheader[0,0;teamform_tabs;Main,Settings;%s;true;false]", tab_idx})
 				table.insert(out, {"hypertext[2.1,0;5.6,1;map_title;<big>%s</big>]",
 					core.hypertext_escape(map_title)})
 			else
@@ -499,15 +573,24 @@ showform = function(player)
 					core.hypertext_escape(map_title)})
 			end
 
-		-- Unassigned players may close the form and reopen it with
-		-- /teamform. Only close-locked rostered players need Leave Game.
-		if not manager and not spectator_approved and table.indexof(readied, playername) == -1 and
-				not starting and locked[playername] then
-			table.insert(out, "allow_close[false]")
-			table.insert(out, "style[leave_game;bgcolor=#CC0000;textcolor=#FFFFFF]")
-			table.insert(out, {"button[%f,%f;3,0.9;leave_game;Leave Game]", w - 3.1, bottom_y - 0.1})
-			table.insert(out, {"tooltip[leave_game;Disconnect from the server]"})
-		end
+			table.insert(out, {"label[%f,1;Spectators (unassigned)]", col3_x})
+			table.insert(out, {"box[0,1.8;%f,6.5;#00000080]", col_w})
+			table.insert(out, {"box[%f,1.8;%f,6.5;#00000080]", col2_x, col_w})
+			table.insert(out, {"box[%f,1.8;%f,6.5;#00000080]", col3_x, col_w})
+			table.insert(out, {"textlist[0,1.8;%f,6.5;team1;" .. color_readied(team1_players) .. ";0;true]", col_w})
+			table.insert(out, {"textlist[%f,1.8;%f,6.5;team2;" .. color_readied(team2_players) .. ";0;true]", col2_x, col_w})
+			table.insert(out, {"textlist[%f,1.8;%f,6.5;spectators;" .. color_unassigned(unassigned_players) ..
+				";%d;true]", col3_x, col_w, selected_idx})
+
+			-- Unassigned players may close the form and reopen it with
+			-- /teamform. Only close-locked rostered players need Leave Game.
+			if not manager and not spectator_approved and table.indexof(readied, playername) == -1 and
+					not starting and locked[playername] then
+				table.insert(out, "allow_close[false]")
+				table.insert(out, "style[leave_game;bgcolor=#CC0000;textcolor=#FFFFFF]")
+				table.insert(out, {"button[%f,%f;3,0.9;leave_game;Leave Game]", w - 3.1, bottom_y - 0.1})
+				table.insert(out, {"tooltip[leave_game;Disconnect from the server]"})
+			end
 
 			if view_manager then
 				local items = {}
@@ -977,6 +1060,27 @@ showform = function(player)
 				return "refresh"
 			end
 
+			if fields.teamform_tabs then
+				if fields.teamform_tabs == "1" or fields.teamform_tabs == "2" then
+					manager_tab[pname] = fields.teamform_tabs
+
+					if fields.teamform_tabs == "1" then
+						editing_timer[pname] = nil
+					end
+				end
+				return "refresh"
+			end
+
+			if fields.edit_auto_capture then
+				editing_timer[pname] = true
+				return "refresh"
+			end
+
+			if fields.cancel_auto_capture then
+				editing_timer[pname] = nil
+				return "refresh"
+			end
+
 		-- NOTE: the dropdowns submit their current value with every
 		-- click, so only treat an actual change as an action. Otherwise
 		-- the lock guard below would swallow every manager submission
@@ -1031,6 +1135,65 @@ showform = function(player)
 					reshow_form()
 					return "refresh"
 				end
+
+			if fields.save_auto_capture or fields.key_enter_field == "auto_capture_minutes" then
+				local val = tonumber(fields.auto_capture_minutes)
+
+				if val then
+					val = math.floor(val)
+				end
+
+				if val and val >= 1 and val <= 60 then
+					if val ~= auto_capture_minutes then
+						if not modifications_allowed() then
+							return "refresh"
+						end
+
+						auto_capture_minutes = val
+						save_carryover()
+						core.chat_send_player(pname,
+							"[tournament] Auto-capture timer set to " .. val ..
+							" minute" .. (val == 1 and "" or "s"))
+						reshow_form()
+					end
+
+					editing_timer[pname] = nil
+					return "refresh"
+				else
+					core.chat_send_player(pname, "[tournament] Invalid value (1-60)")
+					return "refresh"
+				end
+			end
+
+			if fields.nametag_visibility then
+				local idx = tonumber(fields.nametag_visibility) or
+					tonumber((fields.nametag_visibility or ""):match(":(%d+)$"))
+				local new_nv
+
+				if idx == 1 then
+					new_nv = "all"
+				elseif idx == 2 then
+					new_nv = "team_spectator"
+				end
+
+				if new_nv and new_nv ~= nametag_visibility then
+					if not modifications_allowed() then
+						return "refresh"
+					end
+
+					nametag_visibility = new_nv
+					save_carryover()
+
+					if ctf_modebase.update_playertags then
+						ctf_modebase.update_playertags()
+					end
+
+					core.chat_send_player(pname, "[tournament] Nametag visibility set to " ..
+						(nametag_visibility == "all" and "All Players" or "Team & Spectators Only"))
+					reshow_form()
+					return "refresh"
+				end
+			end
 
 			if fields.edit_team1 then
 				if not modifications_allowed() then
@@ -1261,6 +1424,8 @@ showform = function(player)
 			form_shown[pname] = nil
 			editing_team[pname] = nil
 			adding_open[pname] = nil
+			manager_tab[pname] = nil
+			editing_timer[pname] = nil
 			selected_spectator[pname] = nil
 			rendered_rosters[pname] = nil
 
@@ -1340,6 +1505,8 @@ local function player_left(player)
 	form_shown[pname] = nil
 	editing_team[pname] = nil
 	adding_open[pname] = nil
+	manager_tab[pname] = nil
+	editing_timer[pname] = nil
 	selected_spectator[pname] = nil
 	rendered_rosters[pname] = nil
 	spectator_statbars[pname] = nil
@@ -1368,6 +1535,12 @@ return {
 	end,
 	swap_colors = function()
 		return swap_colors
+	end,
+	get_auto_capture_minutes = function()
+		return auto_capture_minutes
+	end,
+	get_nametag_visibility = function()
+		return nametag_visibility
 	end,
 	all_locked_readied = all_locked_readied,
 	update_readied_hud = update_readied_hud,

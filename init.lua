@@ -124,6 +124,8 @@ local readied = teamform.readied
 local TEAM = teamform.TEAM
 local spectator_statbars = teamform.spectator_statbars
 local spectator_props = teamform.spectator_props
+ctf_modebase.set_nametag_visibility_getter(teamform.get_nametag_visibility)
+local get_auto_capture_minutes = teamform.get_auto_capture_minutes
 
 local promohud = mhud.init()
 
@@ -670,6 +672,24 @@ report_win = function(teamnum, match_id)
 		"Team \"" .. winner .. "\" wins the match!")
 	core.log("action", "[tournament] Team " .. dump(winner) .. " won, restarting for the next match")
 
+	-- staff report of the result: winning team name plus its roster.
+	-- guarded: ctf_report is a runtime-only call, the mod may be absent.
+	if ctf_report and ctf_report.send_report then
+		local roster = {}
+
+		for pname, tnum in pairs(locked) do
+			if tnum == teamnum then
+				roster[#roster + 1] = pname
+			end
+		end
+
+		table.sort(roster)
+		local loser = TEAM[3 - teamnum] or (3 - teamnum)
+		ctf_report.send_report("Tournament result: team \"" .. winner ..
+			"\" beat team \"" .. loser .. "\" (winning players: " ..
+			table.concat(roster, ", ") .. ")")
+	end
+
 	teamform.save_carryover()
 
 	-- fresh process for every match: all lobby/match state starts clean
@@ -726,17 +746,21 @@ local function best_online_attempt(players, teamcolor)
 end
 
 local function schedule_sudden_death(match_id)
-	core.after(15 * 60, function()
+	local auto_capture_mins = get_auto_capture_minutes()
+	local warn_mins = math.min(5, auto_capture_mins)
+
+	core.after((auto_capture_mins - warn_mins) * 60, function()
 		if match_id ~= MATCH_ID or not MATCH_STARTED then
 			return
 		end
 
 		core.chat_send_all("\n" ..
 			core.colorize("green", "[ANNOUNCEMENT]") ..
-			" In 5 minutes flag attempts will instantly capture!\n\n"
+			" In " .. warn_mins .. " minute" .. (warn_mins == 1 and "" or "s") ..
+			" the team with the most flag attempts will win!\n\n"
 		)
 
-		core.after(5 * 60, function()
+		core.after(warn_mins * 60, function()
 			if match_id ~= MATCH_ID or not MATCH_STARTED then
 				return
 			end

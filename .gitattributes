@@ -1,0 +1,2 @@
+# Linux checkout: enforce LF line endings for Lua sources.
+*.lua text eol=lf

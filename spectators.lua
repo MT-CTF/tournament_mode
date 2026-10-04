@@ -55,14 +55,49 @@ minetest.register_globalstep(function(dtime)
 	-- minetest.log(minetest.get_timeofday()) -- 0.2, 0.8
 end)
 
-ctf_modebase.get_allowed_nametag_observers = function()
-	local players = {}
+local nametag_getter = function()
+	return "all"
+end
 
-	for _, player in pairs(core.get_connected_players()) do
-		players[player:get_player_name()] = (ctf_teams.get(player) == "spectator") and 1 or true
+ctf_modebase.set_nametag_visibility_getter = function(getter)
+	nametag_getter = function()
+		return getter()
+	end
+end
+
+ctf_modebase.get_allowed_nametag_observers = function(player)
+	local visibility = nametag_getter()
+	local team_only = (visibility == "team_spectator")
+
+	local all = {}
+
+	for _, p in pairs(core.get_connected_players()) do
+		all[p:get_player_name()] = (ctf_teams.get(p) == "spectator") and 1 or true
 	end
 
-	return players
+	if not team_only then
+		return all
+	end
+
+	local pteam = player and ctf_teams.get(player)
+
+	if not pteam or pteam == "spectator" then
+		return all
+	end
+
+	local out = {}
+
+	for _, p in pairs(core.get_connected_players()) do
+		local t = ctf_teams.get(p)
+
+		if t == "spectator" then
+			out[p:get_player_name()] = 1
+		elseif t == pteam then
+			out[p:get_player_name()] = true
+		end
+	end
+
+	return out
 end
 
 local oldfunc = playertag.set
