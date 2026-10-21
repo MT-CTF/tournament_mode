@@ -125,6 +125,7 @@ local TEAM = teamform.TEAM
 local spectator_statbars = teamform.spectator_statbars
 local spectator_props = teamform.spectator_props
 ctf_modebase.set_nametag_visibility_getter(teamform.get_nametag_visibility)
+ctf_modebase.set_bright_nights_getter(teamform.get_bright_nights)
 local get_auto_capture_minutes = teamform.get_auto_capture_minutes
 
 local promohud = mhud.init()
@@ -714,18 +715,6 @@ report_win = function(teamnum, match_id)
 	core.request_shutdown("Tournament match over. Restarting for the next match.", true, 10)
 end
 
-local function count_readied(teamnum)
-	local n = 0
-
-	for _, pname in ipairs(readied) do
-		if locked[pname] == teamnum then
-			n = n + 1
-		end
-	end
-
-	return n
-end
-
 local function best_online_attempt(players, teamcolor)
 	local best, best_count = false, -1
 
@@ -817,7 +806,7 @@ try_start_match = function(force)
 		return false
 	end
 
-	if count_readied(1) < 1 or count_readied(2) < 1 then
+	if not teamform.roster_can_start() then
 		return false
 	end
 
@@ -852,8 +841,8 @@ core.register_chatcommand("force_start", {
 			return false, "Match has already started"
 		end
 
-		if count_readied(1) < 1 or count_readied(2) < 1 then
-			return false, "Each team needs at least one readied player"
+		if not teamform.roster_can_start() then
+			return false, "Each filled team needs at least one readied player"
 		end
 
 		if try_start_match(true) then

@@ -46,7 +46,7 @@ RUN cmake . -DCMAKE_BUILD_TYPE=Release -DRUN_IN_PLACE=TRUE -DBUILD_SERVER=TRUE -
 
 RUN make -j $(nproc)
 
-RUN git -C ./games/ clone --recursive https://github.com/MT-CTF/capturetheflag.git
+RUN git -C ./games/ clone --recursive https://github.com/CTF-Tornament/capturetheflag.git
 
 RUN LUANTI_VERSION="041a7a60031eacce40a2d7c7b73cf6ee8acfe037"
 

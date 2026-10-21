@@ -33,6 +33,7 @@ local pending_mode = "classes"
 local swap_colors = false
 local auto_capture_minutes = 15
 local nametag_visibility = "all"
+local bright_nights = "spectators"
 
 
 --[[
@@ -58,6 +59,7 @@ local function save_carryover()
 	storage:set_string("swap_colors", swap_colors and "true" or "")
 	storage:set_string("auto_capture_minutes", tostring(auto_capture_minutes))
 	storage:set_string("nametag_visibility", nametag_visibility)
+	storage:set_string("bright_nights", bright_nights)
 end
 
 local function load_carryover()
@@ -116,6 +118,11 @@ local function load_carryover()
 	local nv = storage:get_string("nametag_visibility")
 	if nv == "all" or nv == "team_spectator" then
 		nametag_visibility = nv
+	end
+
+	local bn = storage:get_string("bright_nights")
+	if bn == "all" or bn == "spectators" then
+		bright_nights = bn
 	end
 end
 
@@ -553,6 +560,12 @@ showform = function(player)
 				table.insert(s_out, {"dropdown[0.3,3.7;4.5;nametag_visibility;%s;%d;true]",
 					{"All Players", "Team & Spectators Only"}, nv_idx})
 				table.insert(s_out, {"tooltip[nametag_visibility;Who can see player nametags]"})
+
+				local bn_idx = bright_nights == "all" and 2 or 1
+				table.insert(s_out, {"label[0.3,4.4;Bright Nights]"})
+				table.insert(s_out, {"dropdown[0.3,4.9;4.5;bright_nights;%s;%d;true]",
+					{"Spectators", "All Players"}, bn_idx})
+				table.insert(s_out, {"tooltip[bright_nights;Who gets spectator nighttime brightness]"})
 
 				return ctf_gui.list_to_formspec_str(s_out)
 			end
@@ -1195,6 +1208,31 @@ showform = function(player)
 				end
 			end
 
+			if fields.bright_nights then
+				local idx = tonumber(fields.bright_nights) or
+					tonumber((fields.bright_nights or ""):match(":(%d+)$"))
+				local new_bn
+
+				if idx == 1 then
+					new_bn = "spectators"
+				elseif idx == 2 then
+					new_bn = "all"
+				end
+
+				if new_bn and new_bn ~= bright_nights then
+					if not modifications_allowed() then
+						return "refresh"
+					end
+
+					bright_nights = new_bn
+					save_carryover()
+					core.chat_send_player(pname, "[tournament] Bright nights set to " ..
+						(bright_nights == "all" and "All Players" or "Spectators"))
+					reshow_form()
+					return "refresh"
+				end
+			end
+
 			if fields.edit_team1 then
 				if not modifications_allowed() then
 					return "refresh"
@@ -1440,6 +1478,60 @@ showform = function(player)
 	})
 end
 
+local function count_locked(teamnum)
+	local n = 0
+
+	for _, tnum in pairs(locked) do
+		if tnum == teamnum then
+			n = n + 1
+		end
+	end
+
+	return n
+end
+
+local function count_readied(teamnum)
+	local n = 0
+
+	for _, pname in ipairs(readied) do
+		if locked[pname] == teamnum then
+			n = n + 1
+		end
+	end
+
+	return n
+end
+
+-- mirrors the lock gate: every filled team needs a readied player, and an
+-- empty team is only allowed in a manager's debug match (the filled team
+-- then holds a manager)
+local function roster_can_start()
+	local sizes = {count_locked(1), count_locked(2)}
+	local empty = sizes[1] == 0 or sizes[2] == 0
+
+	if sizes[1] + sizes[2] == 0 then
+		return false
+	end
+
+	for teamnum = 1, 2 do
+		if sizes[teamnum] > 0 and count_readied(teamnum) < 1 then
+			return false
+		end
+	end
+
+	if empty then
+		for pname in pairs(locked) do
+			if is_manager(pname) then
+				return true
+			end
+		end
+
+		return false
+	end
+
+	return true
+end
+
 local function all_locked_readied()
 	local n1, n2 = 0, 0
 
@@ -1458,7 +1550,7 @@ local function all_locked_readied()
 		end
 	end
 
-	return n1 >= 1 and n2 >= 1
+	return n1 + n2 >= 1
 end
 
 -- membership entry points used by init.lua's event registrations
@@ -1542,7 +1634,11 @@ return {
 	get_nametag_visibility = function()
 		return nametag_visibility
 	end,
+	get_bright_nights = function()
+		return bright_nights
+	end,
 	all_locked_readied = all_locked_readied,
+	roster_can_start = roster_can_start,
 	update_readied_hud = update_readied_hud,
 	get_pending_map = get_pending_map,
 	get_pending_mode = get_pending_mode,

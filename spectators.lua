@@ -15,6 +15,15 @@ minetest.register_on_player_hpchange(function(player, hp_change, reason)
 	end
 end, true)
 
+local bright_nights_getter = function()
+	return "spectators"
+end
+
+-- true once "all players" mode has brightened rostered players: used to
+-- restore them exactly once when switching back to spectators-only, so the
+-- steady-state loop never fights player skybox choices every tick
+local bright_all_active = false
+
 local timer = 0
 minetest.register_globalstep(function(dtime)
 	timer = timer + dtime
@@ -25,10 +34,32 @@ minetest.register_globalstep(function(dtime)
 
 	timer = 0
 
+	local bright_all = bright_nights_getter() == "all"
+
+	if not bright_all and bright_all_active then
+		bright_all_active = false
+
+		for _, p in pairs(minetest.get_connected_players()) do
+			local team = ctf_teams.get(p)
+
+			if team and team ~= "spectator" then
+				if skybox and skybox.restore then
+					skybox.restore(p)
+				else
+					p:override_day_night_ratio(nil)
+				end
+			end
+		end
+	end
+
+	if bright_all then
+		bright_all_active = true
+	end
+
 	for _, p in pairs(minetest.get_connected_players()) do
 		local team = ctf_teams.get(p)
 
-		if not team or team == "spectator" then
+		if not team or team == "spectator" or bright_all then
 			local time = minetest.get_timeofday()
 
 			if time > 0.5 then
@@ -61,6 +92,12 @@ end
 
 ctf_modebase.set_nametag_visibility_getter = function(getter)
 	nametag_getter = function()
+		return getter()
+	end
+end
+
+ctf_modebase.set_bright_nights_getter = function(getter)
+	bright_nights_getter = function()
 		return getter()
 	end
 end
